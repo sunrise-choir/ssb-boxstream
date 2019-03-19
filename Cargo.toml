@@ -1,0 +1,12 @@
+[package]
+name = "boxstream"
+version = "0.1.0"
+authors = ["sean billig <sean.billig@gmail.com>"]
+edition = "2018"
+license = "AGPL-3.0"
+
+[dependencies]
+byteorder = "1.3"
+futures-preview = "0.3.0-alpha.13"
+shs_core = "~0.2.1"
+sodiumoxide = "0.2"
