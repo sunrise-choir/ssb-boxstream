@@ -1,4 +1,3 @@
-use core::mem::size_of;
 use byteorder::{BigEndian, ByteOrder};
 use futures::future::Future;
 use std::io::{self, Cursor};
@@ -11,7 +10,7 @@ use futures::io::{
 };
 // use futures::stream::Stream;
 use shs_core::NonceGen;
-use sodiumoxide::crypto::secretbox::{self, Nonce, Key};
+use sodiumoxide::crypto::secretbox::{self, Tag};
 
 
 #[derive(Debug)]
@@ -28,58 +27,6 @@ impl From<io::Error> for BoxStreamError {
 
 use BoxStreamError::*;
 
-struct Header {
-    bytes: [u8; 34]
-}
-impl Header {
-    fn new_empty() -> Header {
-        Header { bytes: [0; 34] }
-    }
-
-    fn open(&self, key: &Key, nonce: Nonce) -> Result<(usize, BodyPrefix), BoxStreamError> {
-        let v = secretbox::open(&self.bytes, &nonce, key)
-            .map_err(|_| HeaderOpenFailed)?;
-
-        assert_eq!(v.len(), 18);
-        let (sz, rest) = v.split_at(2);
-        Ok((BigEndian::read_u16(sz) as usize,
-            BodyPrefix::from_slice(rest).unwrap()))
-    }
-}
-
-struct BodyPrefix([u8; 16]);
-impl BodyPrefix {
-    fn from_slice(b: &[u8]) -> Option<BodyPrefix> {
-        if b.len() == 16 {
-            let mut buf = [0; 16];
-            buf.copy_from_slice(b);
-            Some(BodyPrefix(buf))
-        } else {
-            None
-        }
-    }
-    fn as_slice(&self) -> &[u8] {
-        &self.0
-    }
-}
-
-struct Body(Vec<u8>);
-impl Body {
-    fn new(size: usize, prefix: &BodyPrefix) -> Body {
-        let mut v = vec![0; size_of::<BodyPrefix>() + size];
-        v[..size_of::<BodyPrefix>()].copy_from_slice(prefix.as_slice());
-        Body(v)
-    }
-
-    fn mut_tail(&mut self) -> &mut [u8] {
-        &mut self.0[size_of::<BodyPrefix>()..]
-    }
-
-    fn open(self, key: &Key, nonce: Nonce) -> Result<Vec<u8>, BoxStreamError> {
-        secretbox::open(&self.0, &nonce, key)
-            .map_err(|_| BodyOpenFailed)
-    }
-}
 
 pub struct BoxReceiver<R> {
     reader: R,
@@ -94,20 +41,33 @@ impl<R: AsyncRead> BoxReceiver<R> {
     }
 
     async fn recv(&mut self) -> Result<Option<Vec<u8>>, BoxStreamError> {
-        let mut head = Header::new_empty();
-        await!(self.reader.read_exact(&mut head.bytes))?;
 
-        let (size, prefix) = head.open(&self.key, self.noncegen.next())?;
+        let (body_size, body_tag) = {
+            let mut head_tag = Tag([0; 16]);
+            await!(self.reader.read_exact(&mut head_tag.0))?;
 
-        if size == 0 && prefix.as_slice().iter().all(|b| *b == 0) {
+            let mut head_payload = [0; 18];
+            await!(self.reader.read_exact(&mut head_payload[..]))?;
+
+            secretbox::open_detached(&mut head_payload, &head_tag, &self.noncegen.next(), &self.key)
+                .map_err(|_| HeaderOpenFailed)?;
+
+            let (sz, rest) = head_payload.split_at(2);
+            (BigEndian::read_u16(sz) as usize, Tag::from_slice(rest).unwrap())
+        };
+
+        if body_size == 0 && body_tag.0 == [0; 16] {
             // Goodbye
-            return Ok(None);
+            Ok(None)
+        } else {
+            let mut body = vec![0; body_size];
+            await!(self.reader.read_exact(&mut body))?;
+
+            secretbox::open_detached(&mut body, &body_tag, &self.noncegen.next(), &self.key)
+                .map_err(|_| BodyOpenFailed)?;
+
+            Ok(Some(body))
         }
-
-        let mut body = Body::new(size, &prefix);
-        await!(self.reader.read_exact(body.mut_tail()))?;
-
-        Ok(Some(body.open(&self.key, self.noncegen.next())?))
     }
 }
 
