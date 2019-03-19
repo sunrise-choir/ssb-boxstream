@@ -35,7 +35,7 @@ impl<W: AsyncWrite> BoxSender<W> {
 
         let mut r = await!(self.writer.write_all(&hbox));
         if r.is_ok() {
-            r = await!(self.writer.write_all(&sbox));
+            r = await!(self.writer.write_all(&sbox)); // TODO: should probably be sbox[16..]
         }
         (self, buf, r.map_err(|e| e.into()))
     }
@@ -65,12 +65,13 @@ impl<W: AsyncWrite + 'static> AsyncWrite for BoxWriter<W> {
                 v.extend_from_slice(&buf[0..n]);
 
                 if v.capacity() == 0 {
-                    let s = self.sender.take().unwrap();
-                    let buf = std::mem::replace(v, vec![]);
-                    let boxed = Box::pin(s.send_move(buf));
-                    self.state = WriterState::Sending(boxed);
+                    match self.poll_flush(wk) {
+                        Ready(Err(e)) => Ready(Err(e)),
+                        _ => Ready(Ok(n))
+                    }
+                } else {
+                    Ready(Ok(n))
                 }
-                Ready(Ok(n))
             },
 
             WriterState::Sending(fut) => {
@@ -87,8 +88,7 @@ impl<W: AsyncWrite + 'static> AsyncWrite for BoxWriter<W> {
                             },
                             Err(e) => {
                                 self.state = WriterState::Done;
-                                unimplemented!()
-                                // Ready(Err(e.into()))
+                                Ready(Err(e))
                             }
                         }
                     },
@@ -100,8 +100,44 @@ impl<W: AsyncWrite + 'static> AsyncWrite for BoxWriter<W> {
         }
     }
 
-    fn poll_flush(&mut self, _wk: &Waker) -> Poll<Result<(), Error>> {
-        unimplemented!()
+    fn poll_flush(&mut self, wk: &Waker) -> Poll<Result<(), Error>> {
+        match &mut self.state {
+            WriterState::Buffering(v) => {
+                if v.len() > 0 {
+                    let s = self.sender.take().unwrap();
+                    let buf = std::mem::replace(v, vec![]);
+                    let boxed = Box::pin(s.send_move(buf));
+                    self.state = WriterState::Sending(boxed);
+                    self.poll_flush(wk)
+                } else {
+                    Ready(Ok(()))
+                }
+            },
+
+            WriterState::Sending(fut) => {
+                let p = Pin::as_mut(fut);
+
+                match p.poll(wk) {
+                    Ready((sender, mut v, res)) => {
+                        self.sender = Some(sender);
+                        match res {
+                            Ok(()) => {
+                                v.clear();
+                                self.state = WriterState::Buffering(v);
+                                Ready(Ok(()))
+                            },
+                            Err(e) => {
+                                self.state = WriterState::Done;
+                                Ready(Err(e))
+                            }
+                        }
+                    },
+                    Pending => Pending
+                }
+            },
+
+            WriterState::Done => panic!()
+        }
     }
 
     fn poll_close(&mut self, _wk: &Waker) -> Poll<Result<(), Error>> {
