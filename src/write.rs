@@ -21,23 +21,37 @@ pub struct BoxSender<W> {
 
 impl<W: AsyncWrite> BoxSender<W> {
 
-    async fn send_move(mut self, buf: Vec<u8>) -> (Self, Vec<u8>, Result<(), Error>) {
-        assert!(buf.len() <= 4096);
+    async fn send_move(mut self, mut body: Vec<u8>) -> (Self, Vec<u8>, Result<(), Error>) {
+        assert!(body.len() <= 4096);
 
-        let sbox = secretbox::seal(&buf, &self.noncegen.next(), &self.key);
-        assert!(sbox.len() > 16);
+        let hbox = {
+            let mut head_payload = {
+                // Overwrites body with ciphertext
+                let btag = secretbox::seal_detached(&mut body, &self.noncegen.next(), &self.key);
 
-        let mut head_payload = [0; 18];
-        BigEndian::write_u16(&mut head_payload[..2], (sbox.len() - 16) as u16);
-        head_payload[2..].copy_from_slice(&sbox[..16]);
+                let mut hp = [0; 18];
+                let (sz, tag) = hp.split_at_mut(2);
+                BigEndian::write_u16(sz, body.len() as u16);
+                tag.copy_from_slice(&btag[..]);
+                hp
+            };
 
-        let hbox = secretbox::seal(&head_payload, &self.noncegen.next(), &self.key);
+            let htag = secretbox::seal_detached(&mut head_payload, &self.noncegen.next(), &self.key);
+
+            let mut hbox = [0; 34];
+            hbox[..16].copy_from_slice(&htag[..]);
+            hbox[16..].copy_from_slice(&head_payload);
+
+            hbox
+        };
 
         let mut r = await!(self.writer.write_all(&hbox));
         if r.is_ok() {
-            r = await!(self.writer.write_all(&sbox)); // TODO: should probably be sbox[16..]
+            r = await!(self.writer.write_all(&body));
         }
-        (self, buf, r.map_err(|e| e.into()))
+
+        body.clear();
+        (self, body, r.map_err(|e| e.into()))
     }
 }
 
