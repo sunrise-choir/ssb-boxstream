@@ -27,6 +27,16 @@ struct BoxSender<W> {
     noncegen: NonceGen,
 }
 
+impl<W> BoxSender<W> {
+    fn new(w: W, key: secretbox::Key, noncegen: NonceGen) -> BoxSender<W> {
+        BoxSender {
+            writer: w,
+            key: key,
+            noncegen: noncegen,
+        }
+    }
+}
+
 impl<W: AsyncWrite> BoxSender<W> {
 
     async fn send(mut self, mut body: Vec<u8>) -> (Self, Vec<u8>, Result<(), Error>) {
@@ -75,6 +85,15 @@ enum State<W> {
 pub struct BoxWriter<W> {
     sender: Option<BoxSender<W>>,
     state: State<W>
+}
+
+impl<W> BoxWriter<W> {
+    pub fn new(w: W, key: secretbox::Key, noncegen: NonceGen) -> BoxWriter<W> {
+        BoxWriter {
+            sender: Some(BoxSender::new(w, key, noncegen)),
+            state: State::Buffering(Vec::with_capacity(4096)),
+        }
+    }
 }
 
 impl<W: AsyncWrite + 'static> AsyncWrite for BoxWriter<W> {

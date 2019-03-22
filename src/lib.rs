@@ -5,8 +5,10 @@ extern crate futures;
 extern crate shs_core;
 extern crate sodiumoxide;
 
+mod duplex;
 mod read;
 mod write;
 
+pub use duplex::*;
 pub use read::*;
 pub use write::*;

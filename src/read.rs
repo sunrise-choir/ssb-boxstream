@@ -34,13 +34,24 @@ pub struct BoxReceiver<R> {
     noncegen: NonceGen,
 }
 
+impl<R> BoxReceiver<R> {
+    pub fn new(r: R, key: secretbox::Key, noncegen: NonceGen) -> BoxReceiver<R> {
+        BoxReceiver {
+            reader: r,
+            key: key,
+            noncegen: noncegen,
+        }
+    }
+}
+
 impl<R: AsyncRead> BoxReceiver<R> {
-    async fn recv_move(mut self) -> (Self, Result<Option<Vec<u8>>, BoxStreamError>) {
-        let r = await!(self.recv());
+
+    async fn recv(mut self) -> (Self, Result<Option<Vec<u8>>, BoxStreamError>) {
+        let r = await!(self.recv_helper());
         (self, r)
     }
 
-    async fn recv(&mut self) -> Result<Option<Vec<u8>>, BoxStreamError> {
+    async fn recv_helper(&mut self) -> Result<Option<Vec<u8>>, BoxStreamError> {
 
         let (body_size, body_tag) = {
             let mut head_tag = Tag([0; 16]);
@@ -71,17 +82,26 @@ impl<R: AsyncRead> BoxReceiver<R> {
     }
 }
 
-type Fut<R> = Pin<Box<dyn Future<Output=(BoxReceiver<R>, Result<Option<Vec<u8>>, BoxStreamError>)>>>;
+type PinFut<O> = Pin<Box<dyn Future<Output=O> + 'static>>;
 
-enum ReaderState<R> {
+enum State<R> {
     None,
     Data(Cursor<Vec<u8>>),
-    Future(Fut<R>),
+    Future(PinFut<(BoxReceiver<R>, Result<Option<Vec<u8>>, BoxStreamError>)>),
 }
 
 pub struct BoxReader<R> {
     receiver: Option<BoxReceiver<R>>,
-    state: ReaderState<R>,
+    state: State<R>,
+}
+
+impl<R> BoxReader<R> {
+    pub fn new(r: R, key: secretbox::Key, noncegen: NonceGen) -> BoxReader<R> {
+        BoxReader {
+            receiver: Some(BoxReceiver::new(r, key, noncegen)),
+            state: State::None,
+        }
+    }
 }
 
 impl<R: AsyncRead + 'static> AsyncRead for BoxReader<R> {
@@ -89,10 +109,10 @@ impl<R: AsyncRead + 'static> AsyncRead for BoxReader<R> {
                  -> Poll<Result<usize, Error>> {
 
         match &mut self.state {
-            ReaderState::Data(ref mut curs) => {
+            State::Data(ref mut curs) => {
                 match io::Read::read(curs, &mut buf) {
                     Ok(0) => {
-                        self.state = ReaderState::None;
+                        self.state = State::None;
                         self.poll_read(wk, buf)
                     },
                     Ok(n) => Ready(Ok(n)),
@@ -100,7 +120,7 @@ impl<R: AsyncRead + 'static> AsyncRead for BoxReader<R> {
                 }
             },
 
-            ReaderState::Future(ref mut fut) => {
+            State::Future(ref mut fut) => {
                 let p = Pin::as_mut(fut);
 
                 match p.poll(wk) {
@@ -108,15 +128,15 @@ impl<R: AsyncRead + 'static> AsyncRead for BoxReader<R> {
                         self.receiver = Some(b);
                         match r {
                             Ok(Some(v)) => {
-                                self.state = ReaderState::Data(Cursor::new(v));
+                                self.state = State::Data(Cursor::new(v));
                                 self.poll_read(wk, buf)
                             },
                             Ok(None) => {
-                                self.state = ReaderState::None; // TODO: Done?
+                                self.state = State::None; // TODO: Done?
                                 Ready(Ok(0))
                             },
                             Err(e) => {
-                                self.state = ReaderState::None;
+                                self.state = State::None;
                                 unimplemented!()
                                 // Ready(Err(e.into()))
                             }
@@ -126,10 +146,10 @@ impl<R: AsyncRead + 'static> AsyncRead for BoxReader<R> {
                 }
             },
 
-            ReaderState::None => {
+            State::None => {
                 let r = self.receiver.take().unwrap();
-                let boxed = Box::pin(r.recv_move());
-                self.state = ReaderState::Future(boxed);
+                let boxed = Box::pin(r.recv());
+                self.state = State::Future(boxed);
                 self.poll_read(wk, buf)
             }
         }
