@@ -12,16 +12,32 @@ use futures::io::{
 use shs_core::NonceGen;
 use sodiumoxide::crypto::secretbox::{self, Tag};
 
-
-#[derive(Debug)]
-enum BoxStreamError {
-    Io(io::Error),
-    HeaderOpenFailed,
-    BodyOpenFailed,
+quick_error! {
+    #[derive(Debug)]
+    enum BoxStreamError {
+        Io(err: io::Error) {
+            description(err.description())
+        }
+        HeaderOpenFailed {
+            description("Failed to decrypt header")
+        }
+        BodyOpenFailed {
+            description("Failed to decrypt body")
+        }
+    }
 }
+
 impl From<io::Error> for BoxStreamError {
     fn from(err: io::Error) -> BoxStreamError {
         BoxStreamError::Io(err)
+    }
+}
+impl From<BoxStreamError> for io::Error {
+    fn from(err: BoxStreamError) -> io::Error {
+        match err {
+            BoxStreamError::Io(err) => err,
+            err => io::Error::new(io::ErrorKind::InvalidData, err)
+        }
     }
 }
 
@@ -137,8 +153,7 @@ impl<R: AsyncRead + 'static> AsyncRead for BoxReader<R> {
                             },
                             Err(e) => {
                                 self.state = State::None;
-                                unimplemented!()
-                                // Ready(Err(e.into()))
+                                Ready(Err(e.into()))
                             }
                         }
                     },

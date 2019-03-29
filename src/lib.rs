@@ -4,6 +4,7 @@ extern crate byteorder;
 extern crate futures;
 extern crate shs_core;
 extern crate sodiumoxide;
+#[macro_use] extern crate quick_error;
 
 mod duplex;
 mod read;
