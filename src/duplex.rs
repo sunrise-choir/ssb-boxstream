@@ -5,8 +5,8 @@ use std::io;
 
 use shs_core::HandshakeOutcome;
 
-use crate::read::{BoxReader};
-use crate::write::{BoxWriter};
+use crate::read::BoxReader;
+use crate::write::BoxWriter;
 
 
 pub struct BoxStream<R, W> {
