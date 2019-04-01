@@ -57,6 +57,9 @@ impl<W> BoxSender<W> {
             noncegen: noncegen,
         }
     }
+    fn inner(&mut self) -> &mut W {
+        &mut self.writer
+    }
 }
 
 impl<W: AsyncWrite> BoxSender<W> {
@@ -161,7 +164,11 @@ impl<W: AsyncWrite + 'static> AsyncWrite for BoxWriter<W> {
                     self.state = State::Sending(boxed);
                     self.poll_flush(wk)
                 } else {
-                    Ready(Ok(()))
+                    if let Some(ref mut s) = &mut self.sender {
+                        s.inner().poll_flush(wk)
+                    } else {
+                        panic!()
+                    }
                 }
             },
 
@@ -175,7 +182,7 @@ impl<W: AsyncWrite + 'static> AsyncWrite for BoxWriter<W> {
                             Ok(()) => {
                                 v.clear();
                                 self.state = State::Buffering(v);
-                                Ready(Ok(()))
+                                self.poll_flush(wk)
                             },
                             Err(e) => {
                                 self.state = State::Done;

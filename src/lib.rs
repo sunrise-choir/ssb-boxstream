@@ -18,6 +18,9 @@ pub use write::*;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::executor::block_on;
+    use futures::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+    use futures::task::noop_waker;
     use shs_core::NonceGen;
 
     extern crate sodiumoxide;
@@ -71,5 +74,37 @@ mod tests {
         assert_eq!(&head[..], &HEAD3[..]);
     }
 
+    #[test]
+    fn write_and_flush() {
+        // TODO: use a buffered writer to test that boxwriter is actually
+        //  flushing its 'inner' writer
+
+        let key = Key::from_slice(&KEY_BYTES).unwrap();
+        let noncegen = NonceGen::with_starting_nonce(Nonce::from_slice(&NONCE_BYTES).unwrap());
+
+        let (rbw, mut rbr) = async_ringbuffer::ring_buffer(1024);
+        let mut boxw = BoxWriter::new(rbw, key, noncegen);
+
+        block_on(async {
+            await!(boxw.write_all(&[0, 1, 2, 3, 4, 5, 6, 7])).unwrap();
+
+            let mut head = [0; 34];
+
+            // NOTE: async_ringbuffer reader.poll_read returns Pending if the buffer
+            // is empty (not Ok(0))
+            let wk = noop_waker();
+            assert!(rbr.poll_read(&wk, &mut head).is_pending());
+
+            await!(boxw.flush()).unwrap();
+
+            await!(rbr.read_exact(&mut head)).unwrap();
+            assert_eq!(&head[..], &HEAD1[..]);
+
+            let mut body = [0; 8];
+            await!(rbr.read_exact(&mut body)).unwrap();
+            assert_eq!(&body, &BODY1);
+        });
+
+    }
 
 }

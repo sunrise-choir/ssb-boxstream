@@ -11,3 +11,6 @@ futures-preview = "0.3.0-alpha.13"
 shs_core = "~0.2.3"
 sodiumoxide = "0.2"
 quick-error = "1.2"
+
+[dev-dependencies]
+async-ringbuffer = "0.4"
