@@ -16,18 +16,18 @@ pub struct BoxStream<R, W> {
 
 impl<R, W> BoxStream<R, W> {
     pub fn client_side(r: R, w: W, h: HandshakeOutcome) -> BoxStream<R, W> {
-        let HandshakeOutcome { c2s_key, s2c_key, c2s_noncegen, s2c_noncegen } = h;
+        let HandshakeOutcome { read_key, read_noncegen, write_key, write_noncegen } = h;
         BoxStream {
-            reader: BoxReader::new(r, s2c_key.into_inner(), s2c_noncegen.into_inner()),
-            writer: BoxWriter::new(w, c2s_key.into_inner(), c2s_noncegen.into_inner()),
+            reader: BoxReader::new(r, read_key, read_noncegen),
+            writer: BoxWriter::new(w, write_key, write_noncegen),
         }
     }
 
     pub fn server_side(r: R, w: W, h: HandshakeOutcome) -> BoxStream<R, W> {
-        let HandshakeOutcome { c2s_key, s2c_key, c2s_noncegen, s2c_noncegen } = h;
+        let HandshakeOutcome { read_key, read_noncegen, write_key, write_noncegen } = h;
         BoxStream {
-            reader: BoxReader::new(r, c2s_key.into_inner(), c2s_noncegen.into_inner()),
-            writer: BoxWriter::new(w, s2c_key.into_inner(), s2c_noncegen.into_inner()),
+            reader: BoxReader::new(r, read_key, read_noncegen),
+            writer: BoxWriter::new(w, write_key, write_noncegen),
         }
     }
 }

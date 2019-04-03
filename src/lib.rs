@@ -2,8 +2,7 @@
 
 extern crate byteorder;
 extern crate futures;
-extern crate shs_core;
-extern crate sodiumoxide;
+extern crate ssb_crypto;
 #[macro_use] extern crate quick_error;
 
 mod duplex;
@@ -21,10 +20,8 @@ mod tests {
     use futures::executor::block_on;
     use futures::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
     use futures::task::noop_waker;
-    use shs_core::NonceGen;
 
-    extern crate sodiumoxide;
-    use sodiumoxide::crypto::secretbox::{Key, Nonce};
+    use ssb_crypto::{NonceGen, secretbox::{Key, Nonce}};
 
     use crate::write::{seal, seal_header};
 

@@ -8,9 +8,7 @@ use futures::io::{
     Error,
 };
 // use futures::stream::Stream;
-use shs_core::NonceGen;
-
-use sodiumoxide::crypto::secretbox::{self, Nonce};
+use ssb_crypto::{NonceGen, secretbox::{self, Nonce}};
 
 pub(crate) fn seal_header(payload: &mut [u8; 18], nonce: Nonce, key: &secretbox::Key) -> [u8; 34] {
     let htag = secretbox::seal_detached(&mut payload[..], &nonce, &key);

@@ -8,9 +8,8 @@ use futures::io::{
     AsyncReadExt,
     Error,
 };
-// use futures::stream::Stream;
-use shs_core::NonceGen;
-use sodiumoxide::crypto::secretbox::{self, Tag};
+
+use ssb_crypto::{NonceGen, secretbox::{self, Tag}};
 
 quick_error! {
     #[derive(Debug)]

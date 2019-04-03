@@ -8,9 +8,9 @@ license = "AGPL-3.0"
 [dependencies]
 byteorder = "1.3"
 futures-preview = "0.3.0-alpha.13"
-shs_core = "~0.2.3"
-sodiumoxide = "0.2"
 quick-error = "1.2"
+ssb-crypto = { git = "https://github.com/sunrise-choir/ssb-crypto", rev = "199a473" }
+shs_core = { git = "https://github.com/sbillig/shs_core", rev = "5d8093c" }
 
 [dev-dependencies]
 async-ringbuffer = "0.4"
