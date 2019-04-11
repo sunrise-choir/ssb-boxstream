@@ -100,9 +100,10 @@ impl<R: AsyncRead> BoxReceiver<R> {
 type PinFut<O> = Pin<Box<dyn Future<Output=O> + 'static>>;
 
 enum State<R> {
-    None,
+    Ready,
     Data(Cursor<Vec<u8>>),
     Future(PinFut<(BoxReceiver<R>, Result<Option<Vec<u8>>, BoxStreamError>)>),
+    Closed,
 }
 
 pub struct BoxReader<R> {
@@ -114,7 +115,14 @@ impl<R> BoxReader<R> {
     pub fn new(r: R, key: secretbox::Key, noncegen: NonceGen) -> BoxReader<R> {
         BoxReader {
             receiver: Some(BoxReceiver::new(r, key, noncegen)),
-            state: State::None,
+            state: State::Ready,
+        }
+    }
+
+    pub fn is_closed(&self) -> bool {
+        match self.state {
+            State::Closed => true,
+            _ => false,
         }
     }
 }
@@ -124,10 +132,17 @@ impl<R: AsyncRead + 'static> AsyncRead for BoxReader<R> {
                  -> Poll<Result<usize, Error>> {
 
         match &mut self.state {
+            State::Ready => {
+                let r = self.receiver.take().unwrap();
+                let boxed = Box::pin(r.recv());
+                self.state = State::Future(boxed);
+                self.poll_read(wk, buf)
+            },
+
             State::Data(ref mut curs) => {
                 match io::Read::read(curs, &mut buf) {
                     Ok(0) => {
-                        self.state = State::None;
+                        self.state = State::Ready;
                         self.poll_read(wk, buf)
                     },
                     Ok(n) => Ready(Ok(n)),
@@ -147,11 +162,11 @@ impl<R: AsyncRead + 'static> AsyncRead for BoxReader<R> {
                                 self.poll_read(wk, buf)
                             },
                             Ok(None) => {
-                                self.state = State::None; // TODO: Done?
+                                self.state = State::Closed;
                                 Ready(Ok(0))
                             },
                             Err(e) => {
-                                self.state = State::None;
+                                self.state = State::Closed;
                                 Ready(Err(e.into()))
                             }
                         }
@@ -160,12 +175,7 @@ impl<R: AsyncRead + 'static> AsyncRead for BoxReader<R> {
                 }
             },
 
-            State::None => {
-                let r = self.receiver.take().unwrap();
-                let boxed = Box::pin(r.recv());
-                self.state = State::Future(boxed);
-                self.poll_read(wk, buf)
-            }
+            State::Closed => panic!("Read from closed BoxReader")
         }
     }
 }

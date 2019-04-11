@@ -76,10 +76,11 @@ impl<W: AsyncWrite> BoxSender<W> {
         (self, cipher_body, r)
     }
 
-    async fn send_close(mut self) -> Result<(), Error> {
+    async fn send_close(mut self) -> (Self, Result<(), Error>) {
         let mut payload = [0; 18];
         let head = seal_header(&mut payload, self.noncegen.next(), &self.key);
-        await!(self.writer.write_all(&head))
+        let r = await!(self.writer.write_all(&head));
+        (self, r)
     }
 }
 
@@ -89,7 +90,7 @@ type PinFut<O> = Pin<Box<dyn Future<Output=O>>>;
 enum State<W> {
     Buffering(Vec<u8>),
     Sending(PinFut<(BoxSender<W>, Vec<u8>, Result<(), Error>)>),
-    SendingClose(PinFut<Result<(), Error>>),
+    SendingClose(PinFut<(BoxSender<W>, Result<(), Error>)>),
     Closing,
     Done,
 }
@@ -216,11 +217,15 @@ impl<W: AsyncWrite + 'static> AsyncWrite for BoxWriter<W> {
                 let p = Pin::as_mut(fut);
 
                 match p.poll(wk) {
-                    Ready(Ok(())) => {
+                    Ready((s, Ok(()))) => {
+                        self.sender = Some(s);
                         self.state = State::Closing;
                         self.poll_close(wk)
                     },
-                    Ready(Err(e)) => Ready(Err(e)),
+                    Ready((s, Err(e))) => {
+                        self.sender = Some(s);
+                        Ready(Err(e))
+                    },
                     Pending => Pending,
                 }
             },

@@ -67,6 +67,7 @@ mod tests {
         assert_eq!(&head[..], &HEAD2[..]);
         assert_eq!(&body, &BODY2);
 
+        // goodbye
         let head = seal_header(&mut [0; 18], noncegen.next(), &key);
         assert_eq!(&head[..], &HEAD3[..]);
     }
@@ -101,7 +102,35 @@ mod tests {
             await!(rbr.read_exact(&mut body)).unwrap();
             assert_eq!(&body, &BODY1);
         });
-
     }
 
+    #[test]
+    fn twoway() {
+        let key = Key::from_slice(&KEY_BYTES).unwrap();
+        let noncegen_r = NonceGen::with_starting_nonce(Nonce::from_slice(&NONCE_BYTES).unwrap());
+        let noncegen_w = NonceGen::with_starting_nonce(Nonce::from_slice(&NONCE_BYTES).unwrap());
+
+        let (rbw, rbr) = async_ringbuffer::ring_buffer(1024);
+        let mut boxw = BoxWriter::new(rbw, key.clone(), noncegen_w);
+        let mut boxr = BoxReader::new(rbr, key, noncegen_r);
+
+        block_on(async {
+            let body = [0, 1, 2, 3, 4, 5, 6, 7, 7, 6, 5, 4, 3, 2, 1, 0];
+
+            await!(boxw.write_all(&body[0..8])).unwrap();
+            await!(boxw.flush()).unwrap();
+            await!(boxw.write_all(&body[8..])).unwrap();
+            await!(boxw.flush()).unwrap();
+
+            let mut buf = [0; 16];
+            await!(boxr.read_exact(&mut buf)).unwrap();
+            assert_eq!(&buf, &body);
+
+            await!(boxw.close()).unwrap();
+
+            let n = await!(boxr.read(&mut buf)).unwrap();
+            assert_eq!(n, 0);
+            assert!(boxr.is_closed());
+        });
+    }
 }
