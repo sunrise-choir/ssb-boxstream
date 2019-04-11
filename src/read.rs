@@ -1,5 +1,4 @@
 use byteorder::{BigEndian, ByteOrder};
-use futures::future::Future;
 use std::io::{self, Cursor};
 use std::task::{Poll, Poll::Ready, Poll::Pending, Waker};
 use std::pin::Pin;
@@ -10,6 +9,8 @@ use futures::io::{
 };
 
 use ssb_crypto::{NonceGen, secretbox::{self, Tag}};
+
+use crate::PinFut;
 
 quick_error! {
     #[derive(Debug)]
@@ -97,8 +98,6 @@ impl<R: AsyncRead> BoxReceiver<R> {
     }
 }
 
-type PinFut<O> = Pin<Box<dyn Future<Output=O> + 'static>>;
-
 enum State<R> {
     Ready,
     Data(Cursor<Vec<u8>>),
@@ -125,6 +124,12 @@ impl<R> BoxReader<R> {
             _ => false,
         }
     }
+
+    pub fn into_inner(mut self) -> R {
+        let r = self.receiver.take().unwrap();
+        r.reader
+    }
+
 }
 
 impl<R: AsyncRead + 'static> AsyncRead for BoxReader<R> {

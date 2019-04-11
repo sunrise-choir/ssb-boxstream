@@ -1,5 +1,4 @@
 use byteorder::{BigEndian, ByteOrder};
-use futures::future::Future;
 use std::task::{Poll, Poll::Ready, Poll::Pending, Waker};
 use std::pin::Pin;
 use futures::io::{
@@ -9,6 +8,8 @@ use futures::io::{
 };
 // use futures::stream::Stream;
 use ssb_crypto::{NonceGen, secretbox::{self, Nonce}};
+
+use crate::PinFut;
 
 pub(crate) fn seal_header(payload: &mut [u8; 18], nonce: Nonce, key: &secretbox::Key) -> [u8; 34] {
     let htag = secretbox::seal_detached(&mut payload[..], &nonce, &key);
@@ -55,9 +56,6 @@ impl<W> BoxSender<W> {
             noncegen: noncegen,
         }
     }
-    fn inner(&mut self) -> &mut W {
-        &mut self.writer
-    }
 }
 
 impl<W: AsyncWrite> BoxSender<W> {
@@ -84,15 +82,12 @@ impl<W: AsyncWrite> BoxSender<W> {
     }
 }
 
-
-type PinFut<O> = Pin<Box<dyn Future<Output=O>>>;
-
 enum State<W> {
     Buffering(Vec<u8>),
     Sending(PinFut<(BoxSender<W>, Vec<u8>, Result<(), Error>)>),
     SendingClose(PinFut<(BoxSender<W>, Result<(), Error>)>),
     Closing,
-    Done,
+    Closed,
 }
 
 pub struct BoxWriter<W> {
@@ -106,6 +101,18 @@ impl<W> BoxWriter<W> {
             sender: Some(BoxSender::new(w, key, noncegen)),
             state: State::Buffering(Vec::with_capacity(4096)),
         }
+    }
+
+    pub fn is_closed(&self) -> bool {
+        match self.state {
+            State::Closed => true,
+            _ => false,
+        }
+    }
+
+    pub fn into_inner(mut self) -> W {
+        let s = self.sender.take().unwrap();
+        s.writer
     }
 }
 
@@ -140,7 +147,7 @@ impl<W: AsyncWrite + 'static> AsyncWrite for BoxWriter<W> {
                                 self.poll_write(wk, buf)
                             },
                             Err(e) => {
-                                self.state = State::Done;
+                                self.state = State::Closed;
                                 Ready(Err(e))
                             }
                         }
@@ -164,7 +171,7 @@ impl<W: AsyncWrite + 'static> AsyncWrite for BoxWriter<W> {
                     self.poll_flush(wk)
                 } else {
                     if let Some(ref mut s) = &mut self.sender {
-                        s.inner().poll_flush(wk)
+                        s.writer.poll_flush(wk)
                     } else {
                         panic!()
                     }
@@ -184,7 +191,7 @@ impl<W: AsyncWrite + 'static> AsyncWrite for BoxWriter<W> {
                                 self.poll_flush(wk)
                             },
                             Err(e) => {
-                                self.state = State::Done;
+                                self.state = State::Closed;
                                 Ready(Err(e))
                             }
                         }
@@ -203,7 +210,7 @@ impl<W: AsyncWrite + 'static> AsyncWrite for BoxWriter<W> {
                 if let Some(s) = &mut self.sender {
                     match s.writer.poll_close(wk) {
                         Ready(r) => {
-                            self.state = State::Done;
+                            self.state = State::Closed;
                             Ready(r)
                         },
                         Pending => Pending

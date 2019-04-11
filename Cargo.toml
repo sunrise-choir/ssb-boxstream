@@ -13,4 +13,4 @@ ssb-crypto = "0.1"
 shs_core = "0.3"
 
 [dev-dependencies]
-async-ringbuffer = "0.4"
+async-ringbuffer = { git = "https://github.com/sunrise-choir/async-ringbuffer", rev = "59d7d53" }

@@ -13,6 +13,10 @@ pub use duplex::*;
 pub use read::*;
 pub use write::*;
 
+use futures::future::Future;
+use std::pin::Pin;
+
+type PinFut<O> = Pin<Box<dyn Future<Output=O> + 'static>>;
 
 #[cfg(test)]
 mod tests {
@@ -126,11 +130,23 @@ mod tests {
             await!(boxr.read_exact(&mut buf)).unwrap();
             assert_eq!(&buf, &body);
 
+            assert!(!boxw.is_closed());
+            assert!(!boxr.is_closed());
             await!(boxw.close()).unwrap();
+
+            // At this point, the reader doesn't know that the underlying
+            // reader has closed.
+            assert!(!boxr.is_closed());
 
             let n = await!(boxr.read(&mut buf)).unwrap();
             assert_eq!(n, 0);
             assert!(boxr.is_closed());
+
+            let r = boxr.into_inner();
+            assert!(r.is_closed());
+
+            let w = boxw.into_inner();
+            assert!(w.is_closed());
         });
     }
 }
