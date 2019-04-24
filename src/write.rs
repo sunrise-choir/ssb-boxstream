@@ -135,10 +135,8 @@ where W: AsyncWrite + Unpin + 'static
                 }
             },
 
-            State::Sending(fut) => {
-                let p = Pin::as_mut(fut);
-
-                match p.poll(cx) {
+            State::Sending(f) => {
+                match f.as_mut().poll(cx) {
                     Ready((sender, mut v, res)) => {
                         self.sender = Some(sender);
                         match res {
@@ -179,10 +177,8 @@ where W: AsyncWrite + Unpin + 'static
                 }
             },
 
-            State::Sending(fut) => {
-                let p = Pin::as_mut(fut);
-
-                match p.poll(cx) {
+            State::Sending(f) => {
+                match f.as_mut().poll(cx) {
                     Ready((sender, mut v, res)) => {
                         self.sender = Some(sender);
                         match res {
@@ -221,10 +217,8 @@ where W: AsyncWrite + Unpin + 'static
                 }
             }
 
-            State::SendingClose(fut) => {
-                let p = Pin::as_mut(fut);
-
-                match p.poll(cx) {
+            State::SendingClose(f) => {
+                match f.as_mut().poll(cx) {
                     Ready((s, Ok(()))) => {
                         self.sender = Some(s);
                         self.state = State::Closing;

@@ -162,10 +162,8 @@ where R: Unpin + AsyncRead + 'static
                 }
             },
 
-            State::Future(ref mut fut) => {
-                let p = Pin::as_mut(fut);
-
-                match p.poll(cx) {
+            State::Future(ref mut f) => {
+                match f.as_mut().poll(cx) {
                     Ready((b, r)) => {
                         self.receiver = Some(b);
                         match r {
