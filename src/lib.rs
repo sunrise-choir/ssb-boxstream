@@ -2,8 +2,8 @@
 
 extern crate byteorder;
 extern crate futures;
-extern crate ssb_crypto;
 #[macro_use] extern crate quick_error;
+extern crate ssb_crypto;
 
 mod duplex;
 mod read;
@@ -13,14 +13,16 @@ pub use duplex::*;
 pub use read::*;
 pub use write::*;
 
+use core::pin::Pin;
 use futures::future::Future;
-use std::pin::Pin;
 
 type PinFut<O> = Pin<Box<dyn Future<Output=O> + 'static>>;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::task::{Context};
+
     use futures::executor::block_on;
     use futures::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
     use futures::task::noop_waker;
@@ -95,7 +97,8 @@ mod tests {
             // NOTE: async_ringbuffer reader.poll_read returns Pending if the buffer
             // is empty (not Ok(0))
             let wk = noop_waker();
-            assert!(rbr.poll_read(&wk, &mut head).is_pending());
+            let mut cx = Context::from_waker(&wk);
+            assert!(Pin::new(&mut rbr).poll_read(&mut cx, &mut head).is_pending());
 
             await!(boxw.flush()).unwrap();
 

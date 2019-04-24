@@ -1,7 +1,7 @@
 use byteorder::{BigEndian, ByteOrder};
+use core::pin::Pin;
+use core::task::{Context, Poll, Poll::Ready, Poll::Pending};
 use std::io::{self, Cursor};
-use std::task::{Poll, Poll::Ready, Poll::Pending, Waker};
-use std::pin::Pin;
 use futures::io::{
     AsyncRead,
     AsyncReadExt,
@@ -50,7 +50,9 @@ pub struct BoxReceiver<R> {
     noncegen: NonceGen,
 }
 
-impl<R> BoxReceiver<R> {
+impl<R> BoxReceiver<R>
+where R: Unpin
+{
     pub fn new(r: R, key: secretbox::Key, noncegen: NonceGen) -> BoxReceiver<R> {
         BoxReceiver {
             reader: r,
@@ -60,8 +62,9 @@ impl<R> BoxReceiver<R> {
     }
 }
 
-impl<R: AsyncRead> BoxReceiver<R> {
-
+impl<R> BoxReceiver<R>
+where R: Unpin + AsyncRead
+{
     async fn recv(mut self) -> (Self, Result<Option<Vec<u8>>, BoxStreamError>) {
         let r = await!(self.recv_helper());
         (self, r)
@@ -110,7 +113,9 @@ pub struct BoxReader<R> {
     state: State<R>,
 }
 
-impl<R> BoxReader<R> {
+impl<R> BoxReader<R>
+where R: Unpin
+{
     pub fn new(r: R, key: secretbox::Key, noncegen: NonceGen) -> BoxReader<R> {
         BoxReader {
             receiver: Some(BoxReceiver::new(r, key, noncegen)),
@@ -132,8 +137,10 @@ impl<R> BoxReader<R> {
 
 }
 
-impl<R: AsyncRead + 'static> AsyncRead for BoxReader<R> {
-    fn poll_read(&mut self, wk: &Waker, mut buf: &mut [u8])
+impl<R> AsyncRead for BoxReader<R>
+where R: Unpin + AsyncRead + 'static
+{
+    fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context, mut buf: &mut [u8])
                  -> Poll<Result<usize, Error>> {
 
         match &mut self.state {
@@ -141,14 +148,14 @@ impl<R: AsyncRead + 'static> AsyncRead for BoxReader<R> {
                 let r = self.receiver.take().unwrap();
                 let boxed = Box::pin(r.recv());
                 self.state = State::Future(boxed);
-                self.poll_read(wk, buf)
+                self.poll_read(cx, buf)
             },
 
             State::Data(ref mut curs) => {
                 match io::Read::read(curs, &mut buf) {
                     Ok(0) => {
                         self.state = State::Ready;
-                        self.poll_read(wk, buf)
+                        self.poll_read(cx, buf)
                     },
                     Ok(n) => Ready(Ok(n)),
                     Err(e) => Ready(Err(e)),
@@ -158,13 +165,13 @@ impl<R: AsyncRead + 'static> AsyncRead for BoxReader<R> {
             State::Future(ref mut fut) => {
                 let p = Pin::as_mut(fut);
 
-                match p.poll(wk) {
+                match p.poll(cx) {
                     Ready((b, r)) => {
                         self.receiver = Some(b);
                         match r {
                             Ok(Some(v)) => {
                                 self.state = State::Data(Cursor::new(v));
-                                self.poll_read(wk, buf)
+                                self.poll_read(cx, buf)
                             },
                             Ok(None) => {
                                 self.state = State::Closed;
