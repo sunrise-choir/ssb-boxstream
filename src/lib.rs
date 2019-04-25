@@ -137,6 +137,9 @@ mod tests {
             assert!(!boxr.is_closed());
             await!(boxw.close()).unwrap();
 
+            let w = boxw.into_inner();
+            assert!(w.is_closed());
+
             // At this point, the reader doesn't know that the underlying
             // reader has closed.
             assert!(!boxr.is_closed());
@@ -147,9 +150,6 @@ mod tests {
 
             let r = boxr.into_inner();
             assert!(r.is_closed());
-
-            let w = boxw.into_inner();
-            assert!(w.is_closed());
         });
     }
 }

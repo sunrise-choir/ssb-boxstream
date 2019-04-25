@@ -1,4 +1,5 @@
 use byteorder::{BigEndian, ByteOrder};
+use core::mem::replace;
 use core::task::{Context, Poll, Poll::Ready, Poll::Pending};
 use core::pin::Pin;
 use futures::io::{
@@ -83,16 +84,21 @@ where W: AsyncWrite + Unpin
     }
 }
 
-enum State<W> {
-    Buffering(Vec<u8>),
-    Sending(PinFut<(BoxSender<W>, Vec<u8>, Result<(), Error>)>),
-    SendingClose(PinFut<(BoxSender<W>, Result<(), Error>)>),
-    Closing,
-    Closed,
+enum State<T> {
+    Buffering(BoxSender<T>, Vec<u8>),
+    Sending(PinFut<(BoxSender<T>, Vec<u8>, Result<(), Error>)>),
+    SendingClose(PinFut<(BoxSender<T>, Result<(), Error>)>),
+    Closing(BoxSender<T>),
+    Closed(BoxSender<T>),
+    Invalid,
+}
+impl<T> State<T> {
+    fn take(&mut self) -> Self {
+        replace(self, State::Invalid)
+    }
 }
 
 pub struct BoxWriter<W> {
-    sender: Option<BoxSender<W>>,
     state: State<W>
 }
 
@@ -101,164 +107,152 @@ where W: AsyncWrite + Unpin + 'static
 {
     pub fn new(w: W, key: secretbox::Key, noncegen: NonceGen) -> BoxWriter<W> {
         BoxWriter {
-            sender: Some(BoxSender::new(w, key, noncegen)),
-            state: State::Buffering(Vec::with_capacity(4096)),
+            state: State::Buffering(BoxSender::new(w, key, noncegen),
+                                    Vec::with_capacity(4096)),
         }
     }
 
     pub fn is_closed(&self) -> bool {
         match self.state {
-            State::Closed => true,
+            State::Closed(_) => true,
             _ => false,
         }
     }
 
     pub fn into_inner(mut self) -> W {
-        let s = self.sender.take().unwrap();
-        s.writer
+        match self.state.take() {
+            State::Buffering(s, _) |
+            State::Closing(s)      |
+            State::Closed(s) => s.writer,
+            _ => panic!(),
+        }
+    }
+}
+
+
+fn write<T>(state: State<T>, cx: &mut Context, buf: &[u8]) -> (State<T>, Poll<Result<usize, Error>>)
+where T: AsyncWrite + Unpin + 'static
+{
+    if buf.len() == 0 {
+        return (state, Ready(Ok(0)));
     }
 
-    fn do_poll_write(&mut self, cx: &mut Context, buf: &[u8]) -> Poll<Result<usize, Error>> {
-        match &mut self.state {
-            State::Buffering(v) => {
-                let n = core::cmp::min(buf.len(), v.capacity() - v.len());
-                assert!(n != 0);
+    match state {
+        State::Buffering(s, mut v) => {
+            if v.capacity() == 0 {
+                match flush(State::Buffering(s, v), cx) {
+                    (state, Pending) => (state, Pending),
+                    (state, Ready(Ok(()))) => write(state, cx, buf),
+                    (State::Buffering(s, _), Ready(Err(e))) => (State::Closed(s), Ready(Err(e))),
+                    _ => panic!(),
+                }
+            } else {
+                let n = core::cmp::min(buf.len(), v.capacity());
                 v.extend_from_slice(&buf[0..n]);
-
-                if v.capacity() == 0 {
-                    match self.do_poll_flush(cx) {
-                        Ready(Err(e)) => Ready(Err(e)),
-                        _ => Ready(Ok(n))
-                    }
-                } else {
-                    Ready(Ok(n))
-                }
-            },
-
-            State::Sending(f) => {
-                match f.as_mut().poll(cx) {
-                    Ready((sender, mut v, res)) => {
-                        self.sender = Some(sender);
-                        match res {
-                            Ok(()) => {
-                                v.clear();
-                                self.state = State::Buffering(v);
-                                self.do_poll_write(cx, buf)
-                            },
-                            Err(e) => {
-                                self.state = State::Closed;
-                                Ready(Err(e))
-                            }
-                        }
-                    },
-                    Pending => Pending
-                }
-            },
-
-            _ => panic!()
-        }
-    }
-
-    fn do_poll_flush(&mut self, cx: &mut Context) -> Poll<Result<(), Error>> {
-        match &mut self.state {
-            State::Buffering(v) => {
-                if v.len() > 0 {
-                    let s = self.sender.take().unwrap();
-                    let buf = std::mem::replace(v, vec![]);
-                    let boxed = Box::pin(s.send(buf));
-                    self.state = State::Sending(boxed);
-                    self.do_poll_flush(cx)
-                } else {
-                    if let Some(ref mut s) = &mut self.sender {
-                        Pin::new(&mut s.writer).poll_flush(cx)
-                    } else {
-                        panic!()
-                    }
-                }
-            },
-
-            State::Sending(f) => {
-                match f.as_mut().poll(cx) {
-                    Ready((sender, mut v, res)) => {
-                        self.sender = Some(sender);
-                        match res {
-                            Ok(()) => {
-                                v.clear();
-                                self.state = State::Buffering(v);
-                                self.do_poll_flush(cx)
-                            },
-                            Err(e) => {
-                                self.state = State::Closed;
-                                Ready(Err(e))
-                            }
-                        }
-                    },
-                    Pending => Pending
-                }
-            },
-
-            _ => panic!()
-        }
-    }
-
-    fn do_poll_close(&mut self, cx: &mut Context) -> Poll<Result<(), Error>> {
-        match &mut self.state {
-            State::Closing => {
-                if let Some(s) = &mut self.sender {
-                    match Pin::new(&mut s.writer).poll_close(cx) {
-                        Ready(r) => {
-                            self.state = State::Closed;
-                            Ready(r)
-                        },
-                        Pending => Pending
-                    }
-                } else {
-                    panic!()
-                }
+                (State::Buffering(s, v), Ready(Ok(n)))
             }
+        },
 
-            State::SendingClose(f) => {
-                match f.as_mut().poll(cx) {
-                    Ready((s, Ok(()))) => {
-                        self.sender = Some(s);
-                        self.state = State::Closing;
-                        self.do_poll_close(cx)
-                    },
-                    Ready((s, Err(e))) => {
-                        self.sender = Some(s);
-                        Ready(Err(e))
-                    },
-                    Pending => Pending,
-                }
-            },
-
-            _ => match self.do_poll_flush(cx) {
-                Ready(Ok(())) => {
-                    let s = self.sender.take().unwrap();
-                    self.state = State::SendingClose(Box::pin(s.send_close()));
-                    self.do_poll_close(cx)
+        State::Sending(mut f) => {
+            match f.as_mut().poll(cx) {
+                Pending => (State::Sending(f), Pending),
+                Ready((s, _, Err(e))) => (State::Closed(s), Ready(Err(e))),
+                Ready((s, mut v, Ok(()))) => {
+                    v.clear();
+                    write(State::Buffering(s, v), cx, buf)
                 },
-                Ready(Err(e)) => Ready(Err(e)),
-                Pending => Pending,
             }
-        }
+        },
+        _ => panic!()
     }
+}
 
+
+fn flush<T>(state: State<T>, cx: &mut Context) -> (State<T>, Poll<Result<(), Error>>)
+where T: AsyncWrite + Unpin + 'static
+{
+    match state {
+        State::Buffering(mut s, v) => {
+            if v.len() == 0 {
+                let p = Pin::new(&mut s.writer).poll_flush(cx);
+                (State::Buffering(s, v), p)
+            } else {
+                flush(State::Sending(Box::pin(s.send(v))), cx)
+            }
+        },
+        State::Sending(mut f) => {
+            match f.as_mut().poll(cx) {
+                Pending               => (State::Sending(f), Pending),
+                Ready((s, _, Err(e))) => (State::Closed(s), Ready(Err(e))),
+                Ready((mut s, mut v, Ok(()))) => {
+                    v.clear();
+                    let p = Pin::new(&mut s.writer).poll_flush(cx);
+                    (State::Buffering(s, v), p)
+                },
+            }
+        },
+        _ => panic!()
+    }
+}
+
+fn close<T>(state: State<T>, cx: &mut Context) -> (State<T>, Poll<Result<(), Error>>)
+where T: AsyncWrite + Unpin + 'static
+{
+    match state {
+        State::Buffering(s, v) => {
+            if v.len() == 0 {
+                close(State::SendingClose(Box::pin(s.send_close())), cx)
+            } else {
+                close(State::Sending(Box::pin(s.send(v))), cx)
+            }
+        },
+        state @ State::Sending(_) => {
+            match flush(state, cx) {
+                (st, Pending) => (st, Pending),
+                (State::Closed(s), Ready(Err(e)))
+                    => (State::Closed(s), Ready(Err(e))),
+                (State::Buffering(s, _), Ready(Ok(()))) =>
+                    close(State::SendingClose(Box::pin(s.send_close())), cx),
+                _ => panic!(),
+            }
+        },
+        State::SendingClose(mut f) => {
+            match f.as_mut().poll(cx) {
+                Pending => (State::SendingClose(f), Pending),
+                Ready((s, Err(e))) => (State::Closed(s), Ready(Err(e))),
+                Ready((s, Ok(()))) => close(State::Closing(s), cx),
+            }
+        },
+        State::Closing(mut s) => {
+            match Pin::new(&mut s.writer).poll_close(cx) {
+                Pending  => (State::Closing(s), Pending),
+                Ready(r) => (State::Closed(s), Ready(r)),
+            }
+        },
+        state @ State::Closed(_) => (state, Ready(Ok(()))),
+        State::Invalid => panic!(),
+    }
 }
 
 impl<W> AsyncWrite for BoxWriter<W>
 where W: AsyncWrite + Unpin + 'static
 {
     fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context, buf: &[u8]) -> Poll<Result<usize, Error>> {
-        self.do_poll_write(cx, buf)
+        let (state, p) = write(self.state.take(), cx, buf);
+        self.state = state;
+        p
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Error>> {
-        self.do_poll_flush(cx)
+        let (state, p) = flush(self.state.take(), cx);
+        self.state = state;
+        p
     }
 
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Error>> {
-        self.do_poll_close(cx)
+        let (state, p) = close(self.state.take(), cx);
+        self.state = state;
+        p
     }
 
 }
