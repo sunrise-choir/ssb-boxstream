@@ -76,7 +76,7 @@ where W: AsyncWrite + Unpin
         (self, cipher_body, r)
     }
 
-    async fn send_close(mut self) -> (Self, Result<(), Error>) {
+    async fn send_goodbye(mut self) -> (Self, Result<(), Error>) {
         let mut payload = [0; 18];
         let head = seal_header(&mut payload, self.noncegen.next(), &self.key);
         let r = await!(self.writer.write_all(&head));
@@ -87,8 +87,8 @@ where W: AsyncWrite + Unpin
 enum State<T> {
     Buffering(BoxSender<T>, Vec<u8>),
     Sending(PinFut<(BoxSender<T>, Vec<u8>, Result<(), Error>)>),
-    SendingClose(PinFut<(BoxSender<T>, Result<(), Error>)>),
-    Closing(BoxSender<T>),
+    SendingGoodbye(PinFut<(BoxSender<T>, Result<(), Error>)>),
+    Closing(BoxSender<T>, Option<Error>),
     Closed(BoxSender<T>),
     Invalid,
 }
@@ -122,7 +122,7 @@ where W: AsyncWrite + Unpin + 'static
     pub fn into_inner(mut self) -> W {
         match self.state.take() {
             State::Buffering(s, _) |
-            State::Closing(s)      |
+            State::Closing(s, _)   |
             State::Closed(s) => s.writer,
             _ => panic!(),
         }
@@ -141,9 +141,12 @@ where T: AsyncWrite + Unpin + 'static
         State::Buffering(s, mut v) => {
             if v.capacity() == 0 {
                 match flush(State::Buffering(s, v), cx) {
-                    (state, Pending) => (state, Pending),
-                    (state, Ready(Ok(()))) => write(state, cx, buf),
-                    (State::Buffering(s, _), Ready(Err(e))) => (State::Closed(s), Ready(Err(e))),
+                    (st, Pending)       => (st, Pending),
+                    (st, Ready(Ok(()))) => write(st, cx, buf),
+                    (State::Buffering(s, _), Ready(Err(e))) => {
+                        let (st, p) = close(State::Closing(s, Some(e)), cx);
+                        (st, p.map(|r| r.map(|_| 0)))
+                    },
                     _ => panic!(),
                 }
             } else {
@@ -156,10 +159,13 @@ where T: AsyncWrite + Unpin + 'static
         State::Sending(mut f) => {
             match f.as_mut().poll(cx) {
                 Pending => (State::Sending(f), Pending),
-                Ready((s, _, Err(e))) => (State::Closed(s), Ready(Err(e))),
                 Ready((s, mut v, Ok(()))) => {
                     v.clear();
                     write(State::Buffering(s, v), cx, buf)
+                },
+                Ready((s, _, Err(e))) => {
+                    let (st, p) = close(State::Closing(s, Some(e)), cx);
+                    (st, p.map(|r| r.map(|_| 0)))
                 },
             }
         },
@@ -183,7 +189,7 @@ where T: AsyncWrite + Unpin + 'static
         State::Sending(mut f) => {
             match f.as_mut().poll(cx) {
                 Pending               => (State::Sending(f), Pending),
-                Ready((s, _, Err(e))) => (State::Closed(s), Ready(Err(e))),
+                Ready((s, _, Err(e))) => close(State::Closing(s, Some(e)), cx),
                 Ready((mut s, mut v, Ok(()))) => {
                     v.clear();
                     let p = Pin::new(&mut s.writer).poll_flush(cx);
@@ -201,7 +207,7 @@ where T: AsyncWrite + Unpin + 'static
     match state {
         State::Buffering(s, v) => {
             if v.len() == 0 {
-                close(State::SendingClose(Box::pin(s.send_close())), cx)
+                close(State::SendingGoodbye(Box::pin(s.send_goodbye())), cx)
             } else {
                 close(State::Sending(Box::pin(s.send(v))), cx)
             }
@@ -209,24 +215,30 @@ where T: AsyncWrite + Unpin + 'static
         state @ State::Sending(_) => {
             match flush(state, cx) {
                 (st, Pending) => (st, Pending),
-                (State::Closed(s), Ready(Err(e)))
-                    => (State::Closed(s), Ready(Err(e))),
+
+                // Flush succeeded
                 (State::Buffering(s, _), Ready(Ok(()))) =>
-                    close(State::SendingClose(Box::pin(s.send_close())), cx),
+                    close(State::SendingGoodbye(Box::pin(s.send_goodbye())), cx),
+
+                // Flush failed
+                r @ (State::Closing(_, _), _) => r,
+                r @ (State::Closed(_), _)     => r,
+
                 _ => panic!(),
             }
         },
-        State::SendingClose(mut f) => {
+        State::SendingGoodbye(mut f) => {
             match f.as_mut().poll(cx) {
-                Pending => (State::SendingClose(f), Pending),
-                Ready((s, Err(e))) => (State::Closed(s), Ready(Err(e))),
-                Ready((s, Ok(()))) => close(State::Closing(s), cx),
+                Pending => (State::SendingGoodbye(f), Pending),
+                Ready((s, Err(e))) => close(State::Closing(s, Some(e)), cx),
+                Ready((s, Ok(()))) => close(State::Closing(s, None), cx),
             }
         },
-        State::Closing(mut s) => {
-            match Pin::new(&mut s.writer).poll_close(cx) {
-                Pending  => (State::Closing(s), Pending),
-                Ready(r) => (State::Closed(s), Ready(r)),
+        State::Closing(mut s, e) => {
+            match (Pin::new(&mut s.writer).poll_close(cx), e) {
+                (Pending, e)        => (State::Closing(s, e), Pending),
+                (Ready(r), None)    => (State::Closed(s), Ready(r)),
+                (Ready(_), Some(e)) => (State::Closed(s), Ready(Err(e))),
             }
         },
         state @ State::Closed(_) => (state, Ready(Ok(()))),
