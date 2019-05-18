@@ -56,8 +56,8 @@ where
     pub fn new(r: R, key: secretbox::Key, noncegen: NonceGen) -> BoxReceiver<R> {
         BoxReceiver {
             reader: r,
-            key: key,
-            noncegen: noncegen,
+            key,
+            noncegen,
         }
     }
 }

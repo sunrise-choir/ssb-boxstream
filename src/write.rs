@@ -52,8 +52,8 @@ impl<W> BoxSender<W> {
     fn new(w: W, key: secretbox::Key, noncegen: NonceGen) -> BoxSender<W> {
         BoxSender {
             writer: w,
-            key: key,
-            noncegen: noncegen,
+            key,
+            noncegen,
         }
     }
 }
@@ -131,7 +131,7 @@ fn write<T>(state: State<T>, cx: &mut Context, buf: &[u8]) -> (State<T>, Poll<Re
 where
     T: AsyncWrite + Unpin + 'static,
 {
-    if buf.len() == 0 {
+    if buf.is_empty() {
         return (state, Ready(Ok(0)));
     }
 
@@ -175,7 +175,7 @@ where
 {
     match state {
         State::Buffering(mut s, v) => {
-            if v.len() == 0 {
+            if v.is_empty() {
                 let p = Pin::new(&mut s.writer).poll_flush(cx);
                 (State::Buffering(s, v), p)
             } else {
@@ -201,7 +201,7 @@ where
 {
     match state {
         State::Buffering(s, v) => {
-            if v.len() == 0 {
+            if v.is_empty() {
                 close(State::SendingGoodbye(Box::pin(s.send_goodbye())), cx)
             } else {
                 close(State::Sending(Box::pin(s.send(v))), cx)
