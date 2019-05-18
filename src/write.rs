@@ -67,9 +67,9 @@ where W: AsyncWrite + Unpin
 
         let (head, mut cipher_body) = seal(body, &self.key, &mut self.noncegen);
 
-        let mut r = await!(self.writer.write_all(&head));
+        let mut r = self.writer.write_all(&head).await;
         if r.is_ok() {
-            r = await!(self.writer.write_all(&cipher_body));
+            r = self.writer.write_all(&cipher_body).await;
         }
 
         cipher_body.clear();
@@ -79,7 +79,7 @@ where W: AsyncWrite + Unpin
     async fn send_goodbye(mut self) -> (Self, Result<(), Error>) {
         let mut payload = [0; 18];
         let head = seal_header(&mut payload, self.noncegen.next(), &self.key);
-        let r = await!(self.writer.write_all(&head));
+        let r = self.writer.write_all(&head).await;
         (self, r)
     }
 }

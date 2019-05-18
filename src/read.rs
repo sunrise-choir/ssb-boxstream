@@ -66,7 +66,7 @@ impl<R> BoxReceiver<R>
 where R: Unpin + AsyncRead
 {
     async fn recv(mut self) -> (Self, Result<Option<Vec<u8>>, BoxStreamError>) {
-        let r = await!(self.recv_helper());
+        let r = self.recv_helper().await;
         (self, r)
     }
 
@@ -74,10 +74,10 @@ where R: Unpin + AsyncRead
 
         let (body_size, body_tag) = {
             let mut head_tag = Tag([0; 16]);
-            await!(self.reader.read_exact(&mut head_tag.0))?;
+            self.reader.read_exact(&mut head_tag.0).await?;
 
             let mut head_payload = [0; 18];
-            await!(self.reader.read_exact(&mut head_payload[..]))?;
+            self.reader.read_exact(&mut head_payload[..]).await?;
 
             secretbox::open_detached(&mut head_payload, &head_tag, &self.noncegen.next(), &self.key)
                 .map_err(|_| HeaderOpenFailed)?;
@@ -91,7 +91,7 @@ where R: Unpin + AsyncRead
             Ok(None)
         } else {
             let mut body = vec![0; body_size];
-            await!(self.reader.read_exact(&mut body))?;
+            self.reader.read_exact(&mut body).await?;
 
             secretbox::open_detached(&mut body, &body_tag, &self.noncegen.next(), &self.key)
                 .map_err(|_| BodyOpenFailed)?;

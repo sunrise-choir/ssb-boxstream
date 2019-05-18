@@ -1,4 +1,4 @@
-#![feature(async_await, await_macro, futures_api)]
+#![feature(async_await)]
 
 extern crate byteorder;
 extern crate futures;
@@ -90,7 +90,7 @@ mod tests {
         let mut boxw = BoxWriter::new(rbw, key, noncegen);
 
         block_on(async {
-            await!(boxw.write_all(&[0, 1, 2, 3, 4, 5, 6, 7])).unwrap();
+            boxw.write_all(&[0, 1, 2, 3, 4, 5, 6, 7]).await.unwrap();
 
             let mut head = [0; 34];
 
@@ -100,13 +100,13 @@ mod tests {
             let mut cx = Context::from_waker(&wk);
             assert!(Pin::new(&mut rbr).poll_read(&mut cx, &mut head).is_pending());
 
-            await!(boxw.flush()).unwrap();
+            boxw.flush().await.unwrap();
 
-            await!(rbr.read_exact(&mut head)).unwrap();
+            rbr.read_exact(&mut head).await.unwrap();
             assert_eq!(&head[..], &HEAD1[..]);
 
             let mut body = [0; 8];
-            await!(rbr.read_exact(&mut body)).unwrap();
+            rbr.read_exact(&mut body).await.unwrap();
             assert_eq!(&body, &BODY1);
         });
     }
@@ -124,18 +124,18 @@ mod tests {
         block_on(async {
             let body = [0, 1, 2, 3, 4, 5, 6, 7, 7, 6, 5, 4, 3, 2, 1, 0];
 
-            await!(boxw.write_all(&body[0..8])).unwrap();
-            await!(boxw.flush()).unwrap();
-            await!(boxw.write_all(&body[8..])).unwrap();
-            await!(boxw.flush()).unwrap();
+            boxw.write_all(&body[0..8]).await.unwrap();
+            boxw.flush().await.unwrap();
+            boxw.write_all(&body[8..]).await.unwrap();
+            boxw.flush().await.unwrap();
 
             let mut buf = [0; 16];
-            await!(boxr.read_exact(&mut buf)).unwrap();
+            boxr.read_exact(&mut buf).await.unwrap();
             assert_eq!(&buf, &body);
 
             assert!(!boxw.is_closed());
             assert!(!boxr.is_closed());
-            await!(boxw.close()).unwrap();
+            boxw.close().await.unwrap();
 
             let w = boxw.into_inner();
             assert!(w.is_closed());
@@ -144,7 +144,7 @@ mod tests {
             // reader has closed.
             assert!(!boxr.is_closed());
 
-            let n = await!(boxr.read(&mut buf)).unwrap();
+            let n = boxr.read(&mut buf).await.unwrap();
             assert_eq!(n, 0);
             assert!(boxr.is_closed());
 

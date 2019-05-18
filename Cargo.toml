@@ -7,10 +7,10 @@ license = "AGPL-3.0"
 
 [dependencies]
 byteorder = "1.3"
-futures-preview = "0.3.0-alpha.14"
+futures-preview = "0.3.0-alpha.16"
 quick-error = "1.2"
-ssb-crypto = "0.1"
+ssb-crypto = "0.1.2"
 shs_core = "0.3"
 
 [dev-dependencies]
-async-ringbuffer = { git = "https://github.com/sunrise-choir/async-ringbuffer", rev = "0c599a5" }
+async-ringbuffer = "0.5.1"
