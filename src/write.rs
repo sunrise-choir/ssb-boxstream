@@ -1,14 +1,12 @@
 use byteorder::{BigEndian, ByteOrder};
 use core::mem::replace;
-use core::task::{Context, Poll, Poll::Ready, Poll::Pending};
 use core::pin::Pin;
-use futures::io::{
-    AsyncWrite,
-    AsyncWriteExt,
-    Error,
+use core::task::{Context, Poll, Poll::Pending, Poll::Ready};
+use futures::io::{AsyncWrite, AsyncWriteExt, Error};
+use ssb_crypto::{
+    secretbox::{self, Nonce},
+    NonceGen,
 };
-use ssb_crypto::{NonceGen, secretbox::{self, Nonce}};
-
 
 use crate::PinFut;
 
@@ -21,10 +19,11 @@ pub(crate) fn seal_header(payload: &mut [u8; 18], nonce: Nonce, key: &secretbox:
     hbox
 }
 
-pub(crate) fn seal(mut body: Vec<u8>,
-                   key: &secretbox::Key,
-                   noncegen: &mut NonceGen) -> ([u8; 34], Vec<u8>) {
-
+pub(crate) fn seal(
+    mut body: Vec<u8>,
+    key: &secretbox::Key,
+    noncegen: &mut NonceGen,
+) -> ([u8; 34], Vec<u8>) {
     let head_nonce = noncegen.next();
     let body_nonce = noncegen.next();
 
@@ -60,7 +59,8 @@ impl<W> BoxSender<W> {
 }
 
 impl<W: AsyncWrite> BoxSender<W>
-where W: AsyncWrite + Unpin
+where
+    W: AsyncWrite + Unpin,
 {
     async fn send(mut self, body: Vec<u8>) -> (Self, Vec<u8>, Result<(), Error>) {
         assert!(body.len() <= 4096);
@@ -99,16 +99,16 @@ impl<T> State<T> {
 }
 
 pub struct BoxWriter<W> {
-    state: State<W>
+    state: State<W>,
 }
 
 impl<W> BoxWriter<W>
-where W: AsyncWrite + Unpin + 'static
+where
+    W: AsyncWrite + Unpin + 'static,
 {
     pub fn new(w: W, key: secretbox::Key, noncegen: NonceGen) -> BoxWriter<W> {
         BoxWriter {
-            state: State::Buffering(BoxSender::new(w, key, noncegen),
-                                    Vec::with_capacity(4096)),
+            state: State::Buffering(BoxSender::new(w, key, noncegen), Vec::with_capacity(4096)),
         }
     }
 
@@ -121,17 +121,15 @@ where W: AsyncWrite + Unpin + 'static
 
     pub fn into_inner(mut self) -> W {
         match self.state.take() {
-            State::Buffering(s, _) |
-            State::Closing(s, _)   |
-            State::Closed(s) => s.writer,
+            State::Buffering(s, _) | State::Closing(s, _) | State::Closed(s) => s.writer,
             _ => panic!(),
         }
     }
 }
 
-
 fn write<T>(state: State<T>, cx: &mut Context, buf: &[u8]) -> (State<T>, Poll<Result<usize, Error>>)
-where T: AsyncWrite + Unpin + 'static
+where
+    T: AsyncWrite + Unpin + 'static,
 {
     if buf.len() == 0 {
         return (state, Ready(Ok(0)));
@@ -141,12 +139,12 @@ where T: AsyncWrite + Unpin + 'static
         State::Buffering(s, mut v) => {
             if v.capacity() == 0 {
                 match flush(State::Buffering(s, v), cx) {
-                    (st, Pending)       => (st, Pending),
+                    (st, Pending) => (st, Pending),
                     (st, Ready(Ok(()))) => write(st, cx, buf),
                     (State::Buffering(s, _), Ready(Err(e))) => {
                         let (st, p) = close(State::Closing(s, Some(e)), cx);
                         (st, p.map(|r| r.map(|_| 0)))
-                    },
+                    }
                     _ => panic!(),
                 }
             } else {
@@ -154,28 +152,26 @@ where T: AsyncWrite + Unpin + 'static
                 v.extend_from_slice(&buf[0..n]);
                 (State::Buffering(s, v), Ready(Ok(n)))
             }
-        },
+        }
 
-        State::Sending(mut f) => {
-            match f.as_mut().poll(cx) {
-                Pending => (State::Sending(f), Pending),
-                Ready((s, mut v, Ok(()))) => {
-                    v.clear();
-                    write(State::Buffering(s, v), cx, buf)
-                },
-                Ready((s, _, Err(e))) => {
-                    let (st, p) = close(State::Closing(s, Some(e)), cx);
-                    (st, p.map(|r| r.map(|_| 0)))
-                },
+        State::Sending(mut f) => match f.as_mut().poll(cx) {
+            Pending => (State::Sending(f), Pending),
+            Ready((s, mut v, Ok(()))) => {
+                v.clear();
+                write(State::Buffering(s, v), cx, buf)
+            }
+            Ready((s, _, Err(e))) => {
+                let (st, p) = close(State::Closing(s, Some(e)), cx);
+                (st, p.map(|r| r.map(|_| 0)))
             }
         },
-        _ => panic!()
+        _ => panic!(),
     }
 }
 
-
 fn flush<T>(state: State<T>, cx: &mut Context) -> (State<T>, Poll<Result<(), Error>>)
-where T: AsyncWrite + Unpin + 'static
+where
+    T: AsyncWrite + Unpin + 'static,
 {
     match state {
         State::Buffering(mut s, v) => {
@@ -185,24 +181,23 @@ where T: AsyncWrite + Unpin + 'static
             } else {
                 flush(State::Sending(Box::pin(s.send(v))), cx)
             }
-        },
-        State::Sending(mut f) => {
-            match f.as_mut().poll(cx) {
-                Pending               => (State::Sending(f), Pending),
-                Ready((s, _, Err(e))) => close(State::Closing(s, Some(e)), cx),
-                Ready((mut s, mut v, Ok(()))) => {
-                    v.clear();
-                    let p = Pin::new(&mut s.writer).poll_flush(cx);
-                    (State::Buffering(s, v), p)
-                },
+        }
+        State::Sending(mut f) => match f.as_mut().poll(cx) {
+            Pending => (State::Sending(f), Pending),
+            Ready((s, _, Err(e))) => close(State::Closing(s, Some(e)), cx),
+            Ready((mut s, mut v, Ok(()))) => {
+                v.clear();
+                let p = Pin::new(&mut s.writer).poll_flush(cx);
+                (State::Buffering(s, v), p)
             }
         },
-        _ => panic!()
+        _ => panic!(),
     }
 }
 
 fn close<T>(state: State<T>, cx: &mut Context) -> (State<T>, Poll<Result<(), Error>>)
-where T: AsyncWrite + Unpin + 'static
+where
+    T: AsyncWrite + Unpin + 'static,
 {
     match state {
         State::Buffering(s, v) => {
@@ -211,35 +206,32 @@ where T: AsyncWrite + Unpin + 'static
             } else {
                 close(State::Sending(Box::pin(s.send(v))), cx)
             }
-        },
+        }
         state @ State::Sending(_) => {
             match flush(state, cx) {
                 (st, Pending) => (st, Pending),
 
                 // Flush succeeded
-                (State::Buffering(s, _), Ready(Ok(()))) =>
-                    close(State::SendingGoodbye(Box::pin(s.send_goodbye())), cx),
+                (State::Buffering(s, _), Ready(Ok(()))) => {
+                    close(State::SendingGoodbye(Box::pin(s.send_goodbye())), cx)
+                }
 
                 // Flush failed
                 r @ (State::Closing(_, _), _) => r,
-                r @ (State::Closed(_), _)     => r,
+                r @ (State::Closed(_), _) => r,
 
                 _ => panic!(),
             }
+        }
+        State::SendingGoodbye(mut f) => match f.as_mut().poll(cx) {
+            Pending => (State::SendingGoodbye(f), Pending),
+            Ready((s, Err(e))) => close(State::Closing(s, Some(e)), cx),
+            Ready((s, Ok(()))) => close(State::Closing(s, None), cx),
         },
-        State::SendingGoodbye(mut f) => {
-            match f.as_mut().poll(cx) {
-                Pending => (State::SendingGoodbye(f), Pending),
-                Ready((s, Err(e))) => close(State::Closing(s, Some(e)), cx),
-                Ready((s, Ok(()))) => close(State::Closing(s, None), cx),
-            }
-        },
-        State::Closing(mut s, e) => {
-            match (Pin::new(&mut s.writer).poll_close(cx), e) {
-                (Pending, e)        => (State::Closing(s, e), Pending),
-                (Ready(r), None)    => (State::Closed(s), Ready(r)),
-                (Ready(_), Some(e)) => (State::Closed(s), Ready(Err(e))),
-            }
+        State::Closing(mut s, e) => match (Pin::new(&mut s.writer).poll_close(cx), e) {
+            (Pending, e) => (State::Closing(s, e), Pending),
+            (Ready(r), None) => (State::Closed(s), Ready(r)),
+            (Ready(_), Some(e)) => (State::Closed(s), Ready(Err(e))),
         },
         state @ State::Closed(_) => (state, Ready(Ok(()))),
         State::Invalid => panic!(),
@@ -247,9 +239,14 @@ where T: AsyncWrite + Unpin + 'static
 }
 
 impl<W> AsyncWrite for BoxWriter<W>
-where W: AsyncWrite + Unpin + 'static
+where
+    W: AsyncWrite + Unpin + 'static,
 {
-    fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context, buf: &[u8]) -> Poll<Result<usize, Error>> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context,
+        buf: &[u8],
+    ) -> Poll<Result<usize, Error>> {
         let (state, p) = write(self.state.take(), cx, buf);
         self.state = state;
         p
@@ -266,5 +263,4 @@ where W: AsyncWrite + Unpin + 'static
         self.state = state;
         p
     }
-
 }

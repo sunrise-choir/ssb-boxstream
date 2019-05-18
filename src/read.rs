@@ -1,15 +1,14 @@
 use byteorder::{BigEndian, ByteOrder};
 use core::mem::replace;
 use core::pin::Pin;
-use core::task::{Context, Poll, Poll::Ready, Poll::Pending};
+use core::task::{Context, Poll, Poll::Pending, Poll::Ready};
+use futures::io::{AsyncRead, AsyncReadExt, Error};
 use std::io::{self, Cursor};
-use futures::io::{
-    AsyncRead,
-    AsyncReadExt,
-    Error,
-};
 
-use ssb_crypto::{NonceGen, secretbox::{self, Tag}};
+use ssb_crypto::{
+    secretbox::{self, Tag},
+    NonceGen,
+};
 
 use crate::PinFut;
 
@@ -37,7 +36,7 @@ impl From<BoxStreamError> for io::Error {
     fn from(err: BoxStreamError) -> io::Error {
         match err {
             BoxStreamError::Io(err) => err,
-            err => io::Error::new(io::ErrorKind::InvalidData, err)
+            err => io::Error::new(io::ErrorKind::InvalidData, err),
         }
     }
 }
@@ -51,7 +50,8 @@ pub struct BoxReceiver<R> {
 }
 
 impl<R> BoxReceiver<R>
-where R: Unpin
+where
+    R: Unpin,
 {
     pub fn new(r: R, key: secretbox::Key, noncegen: NonceGen) -> BoxReceiver<R> {
         BoxReceiver {
@@ -63,7 +63,8 @@ where R: Unpin
 }
 
 impl<R> BoxReceiver<R>
-where R: Unpin + AsyncRead
+where
+    R: Unpin + AsyncRead,
 {
     async fn recv(mut self) -> (Self, Result<Option<Vec<u8>>, BoxStreamError>) {
         let r = self.recv_helper().await;
@@ -71,7 +72,6 @@ where R: Unpin + AsyncRead
     }
 
     async fn recv_helper(&mut self) -> Result<Option<Vec<u8>>, BoxStreamError> {
-
         let (body_size, body_tag) = {
             let mut head_tag = Tag([0; 16]);
             self.reader.read_exact(&mut head_tag.0).await?;
@@ -79,11 +79,19 @@ where R: Unpin + AsyncRead
             let mut head_payload = [0; 18];
             self.reader.read_exact(&mut head_payload[..]).await?;
 
-            secretbox::open_detached(&mut head_payload, &head_tag, &self.noncegen.next(), &self.key)
-                .map_err(|_| HeaderOpenFailed)?;
+            secretbox::open_detached(
+                &mut head_payload,
+                &head_tag,
+                &self.noncegen.next(),
+                &self.key,
+            )
+            .map_err(|_| HeaderOpenFailed)?;
 
             let (sz, rest) = head_payload.split_at(2);
-            (BigEndian::read_u16(sz) as usize, Tag::from_slice(rest).unwrap())
+            (
+                BigEndian::read_u16(sz) as usize,
+                Tag::from_slice(rest).unwrap(),
+            )
         };
 
         if body_size == 0 && body_tag.0 == [0; 16] {
@@ -114,30 +122,31 @@ impl<T> State<T> {
     }
 }
 
-fn read<R>(state: State<R>, cx: &mut Context, buf: &mut [u8]) -> (State<R>, Poll<Result<usize, Error>>)
-where R: AsyncRead + Unpin + 'static
+fn read<R>(
+    state: State<R>,
+    cx: &mut Context,
+    buf: &mut [u8],
+) -> (State<R>, Poll<Result<usize, Error>>)
+where
+    R: AsyncRead + Unpin + 'static,
 {
     match state {
         State::Ready(r) => read(State::Future(Box::pin(r.recv())), cx, buf),
 
-        State::Data(r, mut curs) => {
-            match io::Read::read(&mut curs, buf) {
-                Ok(0)  => read(State::Future(Box::pin(r.recv())), cx, buf),
-                Ok(n)  => (State::Data(r, curs), Ready(Ok(n))),
-                Err(e) => (State::Closed(r), Ready(Err(e))),
-            }
+        State::Data(r, mut curs) => match io::Read::read(&mut curs, buf) {
+            Ok(0) => read(State::Future(Box::pin(r.recv())), cx, buf),
+            Ok(n) => (State::Data(r, curs), Ready(Ok(n))),
+            Err(e) => (State::Closed(r), Ready(Err(e))),
         },
 
-        State::Future(mut f) => {
-            match f.as_mut().poll(cx) {
-                Pending                 => (State::Future(f), Pending),
-                Ready((r, Ok(Some(v)))) => read(State::Data(r, Cursor::new(v)), cx, buf),
-                Ready((r, Ok(None)))    => (State::Closed(r), Ready(Ok(0))),
-                Ready((r, Err(e)))      => (State::Closed(r), Ready(Err(e.into()))),
-            }
+        State::Future(mut f) => match f.as_mut().poll(cx) {
+            Pending => (State::Future(f), Pending),
+            Ready((r, Ok(Some(v)))) => read(State::Data(r, Cursor::new(v)), cx, buf),
+            Ready((r, Ok(None))) => (State::Closed(r), Ready(Ok(0))),
+            Ready((r, Err(e))) => (State::Closed(r), Ready(Err(e.into()))),
         },
         State::Closed(_) => panic!("Read from closed BoxReader"),
-        State::Invalid   => panic!(),
+        State::Invalid => panic!(),
     }
 }
 
@@ -146,7 +155,8 @@ pub struct BoxReader<R> {
 }
 
 impl<R> BoxReader<R>
-where R: Unpin
+where
+    R: Unpin,
 {
     pub fn new(r: R, key: secretbox::Key, noncegen: NonceGen) -> BoxReader<R> {
         BoxReader {
@@ -163,20 +173,22 @@ where R: Unpin
 
     pub fn into_inner(mut self) -> R {
         match self.state.take() {
-            State::Ready(r)   |
-            State::Data(r, _) |
-            State::Closed(r) => r.reader,
+            State::Ready(r) | State::Data(r, _) | State::Closed(r) => r.reader,
 
-            _ => panic!()
+            _ => panic!(),
         }
     }
 }
 
 impl<R> AsyncRead for BoxReader<R>
-where R: Unpin + AsyncRead + 'static
+where
+    R: Unpin + AsyncRead + 'static,
 {
-    fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context, buf: &mut [u8])
-                 -> Poll<Result<usize, Error>> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context,
+        buf: &mut [u8],
+    ) -> Poll<Result<usize, Error>> {
         let (state, p) = read(self.state.take(), cx, buf);
         self.state = state;
         p
