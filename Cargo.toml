@@ -4,6 +4,11 @@ version = "0.1.0"
 authors = ["sean billig <sean.billig@gmail.com>"]
 edition = "2018"
 license = "AGPL-3.0"
+description = "Encrypted box-stream protocol for Secure Scuttlebutt"
+repository = "https://github.com/sunrise-choir/ssb-boxstream"
+documentation = "https://docs.rs/ssb-boxstream/"
+readme = "README.md"
+keywords = ["box-stream", "ssb", "scuttlebutt"]
 
 [dependencies]
 byteorder = "1.3.1"
