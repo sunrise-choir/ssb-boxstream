@@ -4,7 +4,7 @@ use std::io;
 
 use futures::io::{AsyncRead, AsyncWrite};
 
-use shs_core::HandshakeOutcome;
+use ssb_crypto::handshake::HandshakeKeys;
 
 use crate::read::BoxReader;
 use crate::write::BoxWriter;
@@ -19,8 +19,8 @@ where
     R: AsyncRead + Unpin + 'static,
     W: AsyncWrite + Unpin + 'static,
 {
-    pub fn client_side(r: R, w: W, h: HandshakeOutcome) -> BoxStream<R, W> {
-        let HandshakeOutcome {
+    pub fn client_side(r: R, w: W, h: HandshakeKeys) -> BoxStream<R, W> {
+        let HandshakeKeys {
             read_key,
             read_noncegen,
             write_key,
@@ -32,8 +32,8 @@ where
         }
     }
 
-    pub fn server_side(r: R, w: W, h: HandshakeOutcome) -> BoxStream<R, W> {
-        let HandshakeOutcome {
+    pub fn server_side(r: R, w: W, h: HandshakeKeys) -> BoxStream<R, W> {
+        let HandshakeKeys {
             read_key,
             read_noncegen,
             write_key,
