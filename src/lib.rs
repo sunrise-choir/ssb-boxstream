@@ -1,5 +1,3 @@
-#![feature(async_await)]
-
 extern crate byteorder;
 extern crate futures;
 #[macro_use]
