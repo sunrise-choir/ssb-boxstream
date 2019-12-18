@@ -10,6 +10,8 @@ use ssb_crypto::{
 
 use crate::PinFut;
 
+const MAX_BOX_SIZE: usize = 4096;
+
 pub(crate) fn seal_header(payload: &mut [u8; 18], nonce: Nonce, key: &secretbox::Key) -> [u8; 34] {
     let htag = secretbox::seal_detached(&mut payload[..], &nonce, &key);
 
@@ -63,7 +65,7 @@ where
     W: AsyncWrite + Unpin,
 {
     async fn send(mut self, body: Vec<u8>) -> (Self, Vec<u8>, Result<(), Error>) {
-        assert!(body.len() <= 4096);
+        assert!(body.len() <= MAX_BOX_SIZE);
 
         let (head, mut cipher_body) = seal(body, &self.key, &mut self.noncegen);
 
@@ -108,7 +110,7 @@ where
 {
     pub fn new(w: W, key: secretbox::Key, noncegen: NonceGen) -> BoxWriter<W> {
         BoxWriter {
-            state: State::Buffering(BoxSender::new(w, key, noncegen), Vec::with_capacity(4096)),
+            state: State::Buffering(BoxSender::new(w, key, noncegen), Vec::with_capacity(MAX_BOX_SIZE)),
         }
     }
 
@@ -137,7 +139,8 @@ where
 
     match state {
         State::Buffering(s, mut v) => {
-            if v.capacity() == 0 {
+	    let room = v.capacity() - v.len();
+            if room == 0 {
                 match flush(State::Buffering(s, v), cx) {
                     (st, Pending) => (st, Pending),
                     (st, Ready(Ok(()))) => write(st, cx, buf),
@@ -148,7 +151,8 @@ where
                     _ => panic!(),
                 }
             } else {
-                let n = core::cmp::min(buf.len(), v.capacity());
+                let n = core::cmp::min(buf.len(), room);
+
                 v.extend_from_slice(&buf[0..n]);
                 (State::Buffering(s, v), Ready(Ok(n)))
             }

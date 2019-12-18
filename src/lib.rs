@@ -156,4 +156,28 @@ mod tests {
             assert!(r.is_closed());
         });
     }
+
+    #[test]
+    fn big_body() {
+        let key = Key::from_slice(&KEY_BYTES).unwrap();
+        let noncegen_r = NonceGen::with_starting_nonce(Nonce::from_slice(&NONCE_BYTES).unwrap());
+        let noncegen_w = NonceGen::with_starting_nonce(Nonce::from_slice(&NONCE_BYTES).unwrap());
+
+        let (rbw, rbr) = async_ringbuffer::ring_buffer(8192);
+        let mut boxw = BoxWriter::new(rbw, key.clone(), noncegen_w);
+        let mut boxr = BoxReader::new(rbr, key, noncegen_r);
+
+        block_on(async {
+            let body = [123; 5000];
+
+            boxw.write_all(&body).await.unwrap();
+            boxw.flush().await.unwrap();
+
+            let mut buf = [0; 5000];
+            boxr.read_exact(&mut buf).await.unwrap();
+
+	    assert!(buf.iter().all(|i| i == &123));
+            boxw.close().await.unwrap();
+        });
+    }
 }
