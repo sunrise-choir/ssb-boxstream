@@ -110,7 +110,10 @@ where
 {
     pub fn new(w: W, key: secretbox::Key, noncegen: NonceGen) -> BoxWriter<W> {
         BoxWriter {
-            state: State::Buffering(BoxSender::new(w, key, noncegen), Vec::with_capacity(MAX_BOX_SIZE)),
+            state: State::Buffering(
+                BoxSender::new(w, key, noncegen),
+                Vec::with_capacity(MAX_BOX_SIZE),
+            ),
         }
     }
 
@@ -139,7 +142,7 @@ where
 
     match state {
         State::Buffering(s, mut v) => {
-	    let room = v.capacity() - v.len();
+            let room = v.capacity() - v.len();
             if room == 0 {
                 match flush(State::Buffering(s, v), cx) {
                     (st, Pending) => (st, Pending),

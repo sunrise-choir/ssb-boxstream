@@ -176,7 +176,7 @@ mod tests {
             let mut buf = [0; 5000];
             boxr.read_exact(&mut buf).await.unwrap();
 
-	    assert!(buf.iter().all(|i| i == &123));
+            assert!(buf.iter().all(|i| i == &123));
             boxw.close().await.unwrap();
         });
     }
