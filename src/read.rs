@@ -1,16 +1,15 @@
-use byteorder::{BigEndian, ByteOrder};
-use core::mem::replace;
+use crate::bytes::*;
+use crate::msg::*;
+use crate::PinFut;
+
+use core::mem::{replace, size_of};
 use core::pin::Pin;
 use core::task::{Context, Poll, Poll::Pending, Poll::Ready};
 use futures::io::{AsyncRead, AsyncReadExt, Error};
 use std::io::{self, Cursor};
 
-use ssb_crypto::{
-    secretbox::{self, Tag},
-    NonceGen,
-};
-
-use crate::PinFut;
+use ssb_crypto::handshake::NonceGen;
+use ssb_crypto::secretbox::Key;
 
 quick_error! {
     #[derive(Debug)]
@@ -45,19 +44,19 @@ use BoxStreamError::*;
 
 pub struct BoxReceiver<R> {
     reader: R,
-    key: secretbox::Key,
-    noncegen: NonceGen,
+    key: Key,
+    nonces: NonceGen,
 }
 
 impl<R> BoxReceiver<R>
 where
     R: Unpin,
 {
-    pub fn new(r: R, key: secretbox::Key, noncegen: NonceGen) -> BoxReceiver<R> {
+    pub fn new(r: R, key: Key, nonces: NonceGen) -> BoxReceiver<R> {
         BoxReceiver {
             reader: r,
             key,
-            noncegen,
+            nonces,
         }
     }
 }
@@ -72,39 +71,24 @@ where
     }
 
     async fn recv_helper(&mut self) -> Result<Option<Vec<u8>>, BoxStreamError> {
-        let (body_size, body_tag) = {
-            let mut head_tag = Tag([0; 16]);
-            self.reader.read_exact(&mut head_tag.0).await?;
+        let mut buf = [0; size_of::<HeadSealed>()];
+        self.reader.read_exact(&mut buf).await?;
+        let hd = cast_mut::<HeadSealed>(&mut buf)
+            .open(&self.key, self.nonces.next())
+            .ok_or(HeaderOpenFailed)?;
 
-            let mut head_payload = [0; 18];
-            self.reader.read_exact(&mut head_payload[..]).await?;
-
-            secretbox::open_detached(
-                &mut head_payload,
-                &head_tag,
-                &self.noncegen.next(),
-                &self.key,
-            )
-            .map_err(|_| HeaderOpenFailed)?;
-
-            let (sz, rest) = head_payload.split_at(2);
-            (
-                BigEndian::read_u16(sz) as usize,
-                Tag::from_slice(rest).unwrap(),
-            )
-        };
-
-        if body_size == 0 && body_tag.0 == [0; 16] {
+        if hd.body_size.get() == 0 && hd.body_hmac.0 == [0; 16] {
             // Goodbye
             Ok(None)
         } else {
-            let mut body = vec![0; body_size];
+            let mut body = vec![0; hd.body_size.get() as usize];
             self.reader.read_exact(&mut body).await?;
 
-            secretbox::open_detached(&mut body, &body_tag, &self.noncegen.next(), &self.key)
-                .map_err(|_| BodyOpenFailed)?;
-
-            Ok(Some(body))
+            if self.key.open(&mut body, &hd.body_hmac, &self.nonces.next()) {
+                Ok(Some(body))
+            } else {
+                Err(BodyOpenFailed)
+            }
         }
     }
 }
@@ -158,9 +142,9 @@ impl<R> BoxReader<R>
 where
     R: Unpin,
 {
-    pub fn new(r: R, key: secretbox::Key, noncegen: NonceGen) -> BoxReader<R> {
+    pub fn new(r: R, key: Key, nonces: NonceGen) -> BoxReader<R> {
         BoxReader {
-            state: State::Ready(BoxReceiver::new(r, key, noncegen)),
+            state: State::Ready(BoxReceiver::new(r, key, nonces)),
         }
     }
 

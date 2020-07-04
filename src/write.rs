@@ -1,61 +1,36 @@
-use byteorder::{BigEndian, ByteOrder};
+use crate::msg::*;
+use crate::PinFut;
+
 use core::mem::replace;
 use core::pin::Pin;
 use core::task::{Context, Poll, Poll::Pending, Poll::Ready};
 use futures::io::{AsyncWrite, AsyncWriteExt, Error};
-use ssb_crypto::{
-    secretbox::{self, Nonce},
-    NonceGen,
-};
-
-use crate::PinFut;
+use ssb_crypto::handshake::NonceGen;
+use ssb_crypto::secretbox::{Hmac, Key};
 
 const MAX_BOX_SIZE: usize = 4096;
 
-pub(crate) fn seal_header(payload: &mut [u8; 18], nonce: Nonce, key: &secretbox::Key) -> [u8; 34] {
-    let htag = secretbox::seal_detached(&mut payload[..], &nonce, &key);
-
-    let mut hbox = [0; 34];
-    hbox[..16].copy_from_slice(&htag[..]);
-    hbox[16..].copy_from_slice(&payload[..]);
-    hbox
-}
-
-pub(crate) fn seal(
-    mut body: Vec<u8>,
-    key: &secretbox::Key,
-    noncegen: &mut NonceGen,
-) -> ([u8; 34], Vec<u8>) {
+pub(crate) fn seal(mut body: Vec<u8>, key: &Key, noncegen: &mut NonceGen) -> (HeadSealed, Vec<u8>) {
     let head_nonce = noncegen.next();
     let body_nonce = noncegen.next();
 
-    let mut head_payload = {
-        // Overwrites body with ciphertext
-        let btag = secretbox::seal_detached(&mut body, &body_nonce, &key);
-
-        let mut hp = [0; 18];
-        let (sz, tag) = hp.split_at_mut(2);
-        BigEndian::write_u16(sz, body.len() as u16);
-        tag.copy_from_slice(&btag[..]);
-        hp
-    };
-
-    let head = seal_header(&mut head_payload, head_nonce, key);
+    let body_hmac = key.seal(&mut body, &body_nonce);
+    let head = HeadPayload::new(body.len() as u16, body_hmac).seal(&key, head_nonce);
     (head, body)
 }
 
 struct BoxSender<W> {
     writer: W,
-    key: secretbox::Key,
-    noncegen: NonceGen,
+    key: Key,
+    nonces: NonceGen,
 }
 
 impl<W> BoxSender<W> {
-    fn new(w: W, key: secretbox::Key, noncegen: NonceGen) -> BoxSender<W> {
+    fn new(w: W, key: Key, nonces: NonceGen) -> BoxSender<W> {
         BoxSender {
             writer: w,
             key,
-            noncegen,
+            nonces,
         }
     }
 }
@@ -67,21 +42,19 @@ where
     async fn send(mut self, body: Vec<u8>) -> (Self, Vec<u8>, Result<(), Error>) {
         assert!(body.len() <= MAX_BOX_SIZE);
 
-        let (head, mut cipher_body) = seal(body, &self.key, &mut self.noncegen);
-
-        let mut r = self.writer.write_all(&head).await;
+        let (head, mut body) = seal(body, &self.key, &mut self.nonces);
+        let mut r = self.writer.write_all(head.as_bytes()).await;
         if r.is_ok() {
-            r = self.writer.write_all(&cipher_body).await;
+            r = self.writer.write_all(&body).await;
         }
 
-        cipher_body.clear();
-        (self, cipher_body, r)
+        body.clear();
+        (self, body, r)
     }
 
     async fn send_goodbye(mut self) -> (Self, Result<(), Error>) {
-        let mut payload = [0; 18];
-        let head = seal_header(&mut payload, self.noncegen.next(), &self.key);
-        let r = self.writer.write_all(&head).await;
+        let head = HeadPayload::new(0, Hmac([0; 16])).seal(&self.key, self.nonces.next());
+        let r = self.writer.write_all(head.as_bytes()).await;
         (self, r)
     }
 }
@@ -108,10 +81,10 @@ impl<W> BoxWriter<W>
 where
     W: AsyncWrite + Unpin + 'static,
 {
-    pub fn new(w: W, key: secretbox::Key, noncegen: NonceGen) -> BoxWriter<W> {
+    pub fn new(w: W, key: Key, nonces: NonceGen) -> BoxWriter<W> {
         BoxWriter {
             state: State::Buffering(
-                BoxSender::new(w, key, noncegen),
+                BoxSender::new(w, key, nonces),
                 Vec::with_capacity(MAX_BOX_SIZE),
             ),
         }

@@ -44,6 +44,11 @@ where
             writer: BoxWriter::new(w, write_key, write_noncegen),
         }
     }
+
+    pub fn split(self) -> (BoxReader<R>, BoxWriter<W>) {
+        let BoxStream { reader, writer } = self;
+        (reader, writer)
+    }
 }
 
 impl<R, W> AsyncRead for BoxStream<R, W>
