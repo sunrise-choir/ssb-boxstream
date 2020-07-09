@@ -10,7 +10,7 @@ use ssb_crypto::secretbox::{Hmac, Key};
 
 const MAX_BOX_SIZE: usize = 4096;
 
-pub(crate) fn seal(mut body: Vec<u8>, key: &Key, noncegen: &mut NonceGen) -> (HeadSealed, Vec<u8>) {
+pub(crate) fn seal(mut body: Vec<u8>, key: &Key, noncegen: &mut NonceGen) -> (Head, Vec<u8>) {
     let head_nonce = noncegen.next();
     let body_nonce = noncegen.next();
 

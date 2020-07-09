@@ -23,11 +23,11 @@ type PinFut<O> = Pin<Box<dyn Future<Output = O> + 'static>>;
 mod tests {
     use crate::bytes::AsBytes;
     use crate::msg::*;
-    use crate::write::seal;
+    use crate::read::*;
+    use crate::write::*;
 
-    use super::*;
+    use core::pin::Pin;
     use core::task::Context;
-
     use futures::executor::block_on;
     use futures::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
     use futures::task::noop_waker;

@@ -1,8 +1,7 @@
 use core::pin::Pin;
 use core::task::{Context, Poll};
-use std::io;
 
-use futures::io::{AsyncRead, AsyncWrite};
+use futures::io::{self, AsyncRead, AsyncWrite};
 
 use ssb_crypto::handshake::HandshakeKeys;
 
@@ -10,7 +9,7 @@ use crate::read::BoxReader;
 use crate::write::BoxWriter;
 
 pub struct BoxStream<R, W> {
-    reader: BoxReader<R>,
+    reader: BoxReader<R, Vec<u8>>,
     writer: BoxWriter<W>,
 }
 
@@ -45,7 +44,7 @@ where
         }
     }
 
-    pub fn split(self) -> (BoxReader<R>, BoxWriter<W>) {
+    pub fn split(self) -> (BoxReader<R, Vec<u8>>, BoxWriter<W>) {
         let BoxStream { reader, writer } = self;
         (reader, writer)
     }
