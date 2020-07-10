@@ -14,11 +14,6 @@ pub use duplex::*;
 pub use read::*;
 pub use write::*;
 
-use core::pin::Pin;
-use futures::future::Future;
-
-type PinFut<O> = Pin<Box<dyn Future<Output = O> + 'static>>;
-
 #[cfg(test)]
 mod tests {
     use crate::bytes::AsBytes;
@@ -34,7 +29,7 @@ mod tests {
 
     use ssb_crypto::{
         handshake::NonceGen,
-        secretbox::{Hmac, Key, Nonce},
+        secretbox::{Key, Nonce},
     };
 
     // Test data from https://github.com/AljoschaMeyer/box-stream-c
@@ -70,16 +65,18 @@ mod tests {
     fn encrypt() {
         let mut noncegen = NonceGen::with_starting_nonce(Nonce::from_slice(&NONCE_BYTES).unwrap());
 
-        let (head, body) = seal(vec![0, 1, 2, 3, 4, 5, 6, 7], &KEY, &mut noncegen);
+        let mut body = [0, 1, 2, 3, 4, 5, 6, 7];
+        let head = seal(&mut body, &KEY, &mut noncegen);
         assert_eq!(head.as_bytes(), &HEAD1[..]);
         assert_eq!(&body, &BODY1);
 
-        let (head, body) = seal(vec![7, 6, 5, 4, 3, 2, 1, 0], &KEY, &mut noncegen);
+        let mut body = [7, 6, 5, 4, 3, 2, 1, 0];
+        let head = seal(&mut body, &KEY, &mut noncegen);
         assert_eq!(head.as_bytes(), &HEAD2[..]);
         assert_eq!(&body, &BODY2);
 
         // goodbye
-        let head = HeadPayload::new(0, Hmac([0; 16])).seal(&KEY, noncegen.next());
+        let head = HeadPayload::goodbye().seal(&KEY, noncegen.next());
         assert_eq!(head.as_bytes(), &HEAD3[..]);
     }
 
@@ -163,19 +160,20 @@ mod tests {
         let noncegen_r = NonceGen::with_starting_nonce(Nonce::from_slice(&NONCE_BYTES).unwrap());
         let noncegen_w = NonceGen::with_starting_nonce(Nonce::from_slice(&NONCE_BYTES).unwrap());
 
-        let (rbw, rbr) = async_ringbuffer::ring_buffer(8192);
+        let (rbw, rbr) = async_ringbuffer::ring_buffer(16_384);
         let mut boxw = BoxWriter::new(rbw, KEY.clone(), noncegen_w);
         let mut boxr = BoxReader::new(rbr, KEY.clone(), noncegen_r);
 
         block_on(async {
-            let body = [123; 5000];
+            // write empty buf
+            boxw.write(&[]).await.unwrap();
 
+            let body = [123; 10_000];
             boxw.write_all(&body).await.unwrap();
             boxw.flush().await.unwrap();
 
-            let mut buf = [0; 5000];
+            let mut buf = [0; 10_000];
             boxr.read_exact(&mut buf).await.unwrap();
-
             assert!(buf.iter().all(|i| i == &123));
             boxw.close().await.unwrap();
         });

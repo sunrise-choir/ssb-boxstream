@@ -46,6 +46,13 @@ impl HeadPayload {
         Head { hmac, hbox }
     }
 
+    pub fn goodbye() -> Self {
+        Self {
+            body_size: U16::new(0),
+            body_hmac: Hmac([0; 16]),
+        }
+    }
+
     pub fn is_goodbye(&self) -> bool {
         self.body_size.get() == 0 && self.body_hmac.0 == [0; 16]
     }

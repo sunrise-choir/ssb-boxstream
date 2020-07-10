@@ -10,7 +10,7 @@ use crate::write::BoxWriter;
 
 pub struct BoxStream<R, W> {
     reader: BoxReader<R, Vec<u8>>,
-    writer: BoxWriter<W>,
+    writer: BoxWriter<W, Vec<u8>>,
 }
 
 impl<R, W> BoxStream<R, W>
@@ -44,7 +44,7 @@ where
         }
     }
 
-    pub fn split(self) -> (BoxReader<R, Vec<u8>>, BoxWriter<W>) {
+    pub fn split(self) -> (BoxReader<R, Vec<u8>>, BoxWriter<W, Vec<u8>>) {
         let BoxStream { reader, writer } = self;
         (reader, writer)
     }
