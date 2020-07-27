@@ -1,38 +1,32 @@
 use crate::bytes::cast_mut;
 use crate::msg::*;
 
+use crate::NonceGen;
 use core::cmp::min;
 use core::pin::Pin;
 use core::task::{Context, Poll};
-use futures::io::{self, AsyncRead};
-use futures::ready;
-use ssb_crypto::handshake::NonceGen;
-use ssb_crypto::secretbox::Key;
+use futures_core::ready;
+use futures_io::{self as io, AsyncRead};
+use ssb_crypto::secretbox::{Key, Nonce};
+use thiserror::Error;
 
-quick_error! {
-    #[derive(Debug)]
-    enum BoxStreamError {
-        Io(err: io::Error) {
-            description(err.description())
-        }
-        HeaderOpenFailed {
-            description("Failed to decrypt header")
-        }
-        BodyOpenFailed {
-            description("Failed to decrypt body")
-        }
-    }
+#[derive(Debug, Error)]
+enum BoxStreamError {
+    #[error("IO error: {source}")]
+    Io {
+        #[from]
+        source: io::Error,
+    },
+    #[error("Failed to decrypt header")]
+    HeaderOpenFailed,
+    #[error("Failed to decrypt body")]
+    BodyOpenFailed,
 }
 
-impl From<io::Error> for BoxStreamError {
-    fn from(err: io::Error) -> BoxStreamError {
-        BoxStreamError::Io(err)
-    }
-}
 impl From<BoxStreamError> for io::Error {
     fn from(err: BoxStreamError) -> io::Error {
         match err {
-            BoxStreamError::Io(err) => err,
+            BoxStreamError::Io { source } => source,
             err => io::Error::new(io::ErrorKind::InvalidData, err),
         }
     }
@@ -47,7 +41,7 @@ pub struct BoxReader<R, B> {
 }
 
 impl<R, B> BoxReader<R, B> {
-    pub fn with_buffer(inner: R, key: Key, nonces: NonceGen, buffer: B) -> BoxReader<R, B> {
+    pub fn with_buffer(inner: R, key: Key, nonce: Nonce, buffer: B) -> BoxReader<R, B> {
         BoxReader {
             inner,
             buffer,
@@ -56,7 +50,7 @@ impl<R, B> BoxReader<R, B> {
                 pos: 0,
             },
             key,
-            nonces,
+            nonces: NonceGen::with_starting_nonce(nonce),
         }
     }
 
@@ -73,8 +67,8 @@ impl<R, B> BoxReader<R, B> {
 }
 
 impl<R> BoxReader<R, Vec<u8>> {
-    pub fn new(inner: R, key: Key, nonces: NonceGen) -> BoxReader<R, Vec<u8>> {
-        BoxReader::with_buffer(inner, key, nonces, std::vec![0; 4096])
+    pub fn new(inner: R, key: Key, nonce: Nonce) -> BoxReader<R, Vec<u8>> {
+        BoxReader::with_buffer(inner, key, nonce, std::vec![0; 4096])
     }
 }
 

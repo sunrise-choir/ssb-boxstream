@@ -1,12 +1,9 @@
-use core::pin::Pin;
-use core::task::{Context, Poll};
-
-use futures::io::{self, AsyncRead, AsyncWrite};
-
-use ssb_crypto::handshake::HandshakeKeys;
-
 use crate::read::BoxReader;
 use crate::write::BoxWriter;
+use core::pin::Pin;
+use core::task::{Context, Poll};
+use futures_io::{self as io, AsyncRead, AsyncWrite};
+use ssb_crypto::secretbox::{Key, Nonce};
 
 pub struct BoxStream<R, W> {
     reader: BoxReader<R, Vec<u8>>,
@@ -18,29 +15,17 @@ where
     R: AsyncRead + Unpin + 'static,
     W: AsyncWrite + Unpin + 'static,
 {
-    pub fn client_side(r: R, w: W, h: HandshakeKeys) -> BoxStream<R, W> {
-        let HandshakeKeys {
-            read_key,
-            read_noncegen,
-            write_key,
-            write_noncegen,
-        } = h;
+    pub fn new(
+        r: R,
+        w: W,
+        r_key: Key,
+        r_nonce: Nonce,
+        w_key: Key,
+        w_nonce: Nonce,
+    ) -> BoxStream<R, W> {
         BoxStream {
-            reader: BoxReader::new(r, read_key, read_noncegen),
-            writer: BoxWriter::new(w, write_key, write_noncegen),
-        }
-    }
-
-    pub fn server_side(r: R, w: W, h: HandshakeKeys) -> BoxStream<R, W> {
-        let HandshakeKeys {
-            read_key,
-            read_noncegen,
-            write_key,
-            write_noncegen,
-        } = h;
-        BoxStream {
-            reader: BoxReader::new(r, read_key, read_noncegen),
-            writer: BoxWriter::new(w, write_key, write_noncegen),
+            reader: BoxReader::new(r, r_key, r_nonce),
+            writer: BoxWriter::new(w, w_key, w_nonce),
         }
     }
 

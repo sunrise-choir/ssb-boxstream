@@ -1,12 +1,8 @@
-extern crate byteorder;
-extern crate futures;
-#[macro_use]
-extern crate quick_error;
-extern crate ssb_crypto;
-
 mod bytes;
 mod duplex;
 mod msg;
+mod noncegen;
+use noncegen::*;
 mod read;
 mod write;
 
@@ -20,17 +16,15 @@ mod tests {
     use crate::msg::*;
     use crate::read::*;
     use crate::write::*;
+    use crate::NonceGen;
 
     use core::pin::Pin;
     use core::task::Context;
-    use futures::executor::block_on;
-    use futures::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
-    use futures::task::noop_waker;
-
-    use ssb_crypto::{
-        handshake::NonceGen,
-        secretbox::{Key, Nonce},
-    };
+    use futures_executor::block_on;
+    use futures_io::AsyncRead;
+    use futures_task::noop_waker;
+    use futures_util::io::{AsyncReadExt, AsyncWriteExt};
+    use ssb_crypto::secretbox::{Key, Nonce};
 
     // Test data from https://github.com/AljoschaMeyer/box-stream-c
     const KEY: Key = Key([
@@ -85,10 +79,8 @@ mod tests {
         // TODO: use a buffered writer to test that boxwriter is actually
         //  flushing its 'inner' writer
 
-        let noncegen = NonceGen::with_starting_nonce(Nonce::from_slice(&NONCE_BYTES).unwrap());
-
         let (rbw, mut rbr) = async_ringbuffer::ring_buffer(1024);
-        let mut boxw = BoxWriter::new(rbw, KEY.clone(), noncegen);
+        let mut boxw = BoxWriter::new(rbw, KEY.clone(), Nonce(NONCE_BYTES));
 
         block_on(async {
             boxw.write_all(&[0, 1, 2, 3, 4, 5, 6, 7]).await.unwrap();
@@ -116,12 +108,9 @@ mod tests {
 
     #[test]
     fn twoway() {
-        let noncegen_r = NonceGen::with_starting_nonce(Nonce::from_slice(&NONCE_BYTES).unwrap());
-        let noncegen_w = NonceGen::with_starting_nonce(Nonce::from_slice(&NONCE_BYTES).unwrap());
-
         let (rbw, rbr) = async_ringbuffer::ring_buffer(1024);
-        let mut boxw = BoxWriter::new(rbw, KEY.clone(), noncegen_w);
-        let mut boxr = BoxReader::new(rbr, KEY.clone(), noncegen_r);
+        let mut boxw = BoxWriter::new(rbw, KEY.clone(), Nonce(NONCE_BYTES));
+        let mut boxr = BoxReader::new(rbr, KEY.clone(), Nonce(NONCE_BYTES));
 
         block_on(async {
             let body = [0, 1, 2, 3, 4, 5, 6, 7, 7, 6, 5, 4, 3, 2, 1, 0];
@@ -157,12 +146,9 @@ mod tests {
 
     #[test]
     fn big_body() {
-        let noncegen_r = NonceGen::with_starting_nonce(Nonce::from_slice(&NONCE_BYTES).unwrap());
-        let noncegen_w = NonceGen::with_starting_nonce(Nonce::from_slice(&NONCE_BYTES).unwrap());
-
         let (rbw, rbr) = async_ringbuffer::ring_buffer(16_384);
-        let mut boxw = BoxWriter::new(rbw, KEY.clone(), noncegen_w);
-        let mut boxr = BoxReader::new(rbr, KEY.clone(), noncegen_r);
+        let mut boxw = BoxWriter::new(rbw, KEY.clone(), Nonce(NONCE_BYTES));
+        let mut boxr = BoxReader::new(rbr, KEY.clone(), Nonce(NONCE_BYTES));
 
         block_on(async {
             // write empty buf
@@ -178,7 +164,4 @@ mod tests {
             boxw.close().await.unwrap();
         });
     }
-
-    #[test]
-    fn duplex() {}
 }

@@ -1,12 +1,11 @@
 use crate::msg::*;
-
+use crate::NonceGen;
 use core::cmp::min;
 use core::pin::Pin;
 use core::task::{Context, Poll};
-use futures::io::{AsyncWrite, Error};
-use futures::ready;
-use ssb_crypto::handshake::NonceGen;
-use ssb_crypto::secretbox::Key;
+use futures_core::ready;
+use futures_io::{AsyncWrite, Error};
+use ssb_crypto::secretbox::{Key, Nonce};
 
 pub const MAX_BOX_SIZE: usize = 4096;
 
@@ -27,13 +26,13 @@ pub struct BoxWriter<W, B> {
 }
 
 impl<W, B> BoxWriter<W, B> {
-    pub fn with_buffer(inner: W, key: Key, nonces: NonceGen, buffer: B) -> BoxWriter<W, B> {
+    pub fn with_buffer(inner: W, key: Key, nonce: Nonce, buffer: B) -> BoxWriter<W, B> {
         BoxWriter {
             inner,
             buffer,
             state: State::Buffering { pos: 0 },
             key,
-            nonces,
+            nonces: NonceGen::with_starting_nonce(nonce),
         }
     }
 
@@ -47,8 +46,8 @@ impl<W, B> BoxWriter<W, B> {
 }
 
 impl<W> BoxWriter<W, Vec<u8>> {
-    pub fn new(w: W, key: Key, nonces: NonceGen) -> BoxWriter<W, Vec<u8>> {
-        BoxWriter::with_buffer(w, key, nonces, vec![0; 4096])
+    pub fn new(w: W, key: Key, nonce: Nonce) -> BoxWriter<W, Vec<u8>> {
+        BoxWriter::with_buffer(w, key, nonce, vec![0; 4096])
     }
 }
 
